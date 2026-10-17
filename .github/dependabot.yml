@@ -1,0 +1,32 @@
+version: 2
+updates:
+  - package-ecosystem: mix
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      phoenix:
+        patterns: ["phoenix*"]
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: npm
+    directory: /assets
+    schedule:
+      interval: weekly
+    groups:
+      codemirror:
+        patterns: ["@codemirror/*", "@lezer/*"]
+      dev-tooling:
+        dependency-type: development
+        update-types: [minor, patch]
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
