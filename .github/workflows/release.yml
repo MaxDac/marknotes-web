@@ -91,6 +91,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - run: flyctl deploy --remote-only --image-label "v$VERSION"
+      - run: flyctl deploy --remote-only --ha=false --image-label "v$VERSION"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

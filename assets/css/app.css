@@ -1,0 +1,238 @@
+@import "highlight.js/styles/github.css";
+:root {
+  color-scheme: light;
+  --bg: #fafafa;
+  --fg: #18212c;
+  --panel: #fff;
+  --line: #d4dbe3;
+  --accent: #2563eb;
+  font:
+    16px/1.5 system-ui,
+    sans-serif;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #101820;
+  --fg: #e6edf3;
+  --panel: #17232e;
+  --line: #425365;
+}
+:root[data-accent="teal"] {
+  --accent: #0d9488;
+}
+:root[data-accent="green"] {
+  --accent: #16a34a;
+}
+:root[data-accent="amber"] {
+  --accent: #b7791f;
+}
+:root[data-accent="orange"] {
+  --accent: #ea580c;
+}
+:root[data-accent="red"] {
+  --accent: #dc2626;
+}
+:root[data-accent="pink"] {
+  --accent: #db2777;
+}
+:root[data-accent="purple"] {
+  --accent: #9333ea;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: baseline;
+  padding: 0.5rem 1.2rem;
+  border-bottom: 3px solid var(--accent);
+}
+h1 {
+  margin: 0.3rem 0;
+  font-size: 1.6rem;
+}
+h2 {
+  font-size: 1.1rem;
+}
+button,
+select,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0.3rem;
+  padding: 0.4rem 0.65rem;
+}
+button {
+  cursor: pointer;
+  margin: 0.2rem;
+}
+button:hover,
+button:focus-visible {
+  border-color: var(--accent);
+}
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+}
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.actions,
+.settings {
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+.workspace {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  min-height: 55vh;
+}
+aside {
+  border-right: 1px solid var(--line);
+  padding: 0.7rem;
+  overflow: auto;
+}
+#tree button {
+  display: block;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.document {
+  min-width: 0;
+  padding: 0.5rem 1rem;
+}
+#title {
+  overflow-wrap: anywhere;
+}
+.panes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1rem;
+}
+#editor,
+#preview {
+  min-height: 42vh;
+  max-height: 70vh;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0.3rem;
+}
+#preview {
+  padding: 1rem;
+  overflow-wrap: anywhere;
+}
+.cm-editor {
+  min-height: 42vh;
+}
+.cm-scroller {
+  font:
+    15px/1.6 ui-monospace,
+    monospace;
+}
+.cm-content {
+  padding: 0.7rem;
+}
+.cm-focused {
+  outline-color: var(--accent) !important;
+}
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+table {
+  border-collapse: collapse;
+}
+td,
+th {
+  border: 1px solid var(--line);
+  padding: 0.3rem;
+}
+a {
+  color: var(--accent);
+}
+label {
+  display: inline-block;
+  margin-right: 1rem;
+}
+#status,
+#error {
+  padding: 0.2rem 1.2rem;
+  white-space: pre-wrap;
+}
+#error {
+  border-left: 4px solid #dc2626;
+}
+.account,
+.conflict {
+  padding: 0.7rem;
+  margin: 0.5rem 0;
+  border: 1px solid var(--line);
+}
+.conflict textarea {
+  display: block;
+  width: 100%;
+  min-height: 10rem;
+}
+dialog {
+  max-width: min(600px, 95vw);
+  max-height: 90vh;
+  overflow: auto;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+dialog::backdrop {
+  background: #0008;
+}
+dialog button {
+  display: inline-block;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+@media (max-width: 800px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+  aside {
+    max-height: 220px;
+    border-right: 0;
+  }
+  .panes {
+    grid-template-columns: 1fr;
+  }
+  #editor,
+  #preview {
+    min-height: 200px;
+  }
+}
