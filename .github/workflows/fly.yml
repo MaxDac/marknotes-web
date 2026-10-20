@@ -27,6 +27,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - run: flyctl deploy --remote-only --image-label "main-${GITHUB_SHA::7}"
+      - run: flyctl deploy --remote-only --ha=false --image-label "main-${GITHUB_SHA::7}"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

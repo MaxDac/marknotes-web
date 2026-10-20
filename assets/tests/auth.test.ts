@@ -1,0 +1,122 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Auth, pkce, request } from "../js/auth";
+import { Store, Vault, type Account } from "../js/storage";
+const mocks = vi.hoisted(() => ({
+  config: vi.fn(),
+  login: vi.fn(),
+  silent: vi.fn(),
+  sso: vi.fn(),
+  account: vi.fn(),
+}));
+vi.mock("@azure/msal-browser", () => ({
+  BrowserCacheLocation: { MemoryStorage: "memoryStorage" },
+  InteractionRequiredAuthError: class extends Error {},
+  PublicClientApplication: class {
+    constructor(config: unknown) {
+      mocks.config(config);
+    }
+    initialize = async () => {};
+    loginPopup = mocks.login;
+    acquireTokenSilent = mocks.silent;
+    ssoSilent = mocks.sso;
+    getAccount = mocks.account;
+  },
+}));
+let store: Store;
+const account: Account = {
+  id: "db",
+  subject: "db-user",
+  label: "user",
+  provider: "dropbox",
+  folder: "MarkNotes",
+};
+beforeEach(async () => {
+  vi.clearAllMocks();
+  store = await Store.open(crypto.randomUUID());
+});
+afterEach(() => {
+  store.close();
+  vi.unstubAllGlobals();
+});
+describe("browser authentication", () => {
+  it("generates random S256 PKCE verifier/challenge and state", async () => {
+    const a = await pkce(),
+      b = await pkce();
+    expect(a.verifier).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(a.verifier),
+    );
+    expect(a.challenge).toBe(Buffer.from(digest).toString("base64url"));
+    expect(a.state).not.toBe(b.state);
+    expect(a.verifier).not.toBe(b.verifier);
+  });
+  it("uses exact MSAL scopes/common authority and memory-only cache", async () => {
+    mocks.login.mockResolvedValue({
+      accessToken: "private",
+      expiresOn: new Date(Date.now() + 3600000),
+      account: { username: "user@example.invalid", homeAccountId: "home" },
+    });
+    const auth = new Auth(store, { dropbox: "", onedrive: "public-client" });
+    const result = await auth.connect("onedrive");
+    expect(mocks.config).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auth: expect.objectContaining({
+          authority: "https://login.microsoftonline.com/common",
+          redirectUri: `${location.origin}/oauth/onedrive`,
+        }),
+        cache: { cacheLocation: "memoryStorage" },
+      }),
+    );
+    expect(mocks.login).toHaveBeenCalledWith({
+      scopes: ["Files.ReadWrite", "User.Read"],
+      prompt: "select_account",
+    });
+    expect(await new Vault(store).load(result.id)).toEqual(
+      expect.objectContaining({ access: "private" }),
+    );
+  });
+  it("rotates Dropbox refresh tokens directly in the browser", async () => {
+    await new Vault(store).save(account.id, {
+      access: "expired",
+      refresh: "old-refresh",
+      expires: 0,
+    });
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          access_token: "renewed",
+          refresh_token: "new-refresh",
+          expires_in: 3600,
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const auth = new Auth(store, { dropbox: "public-key", onedrive: "" });
+    expect(await auth.token(account)).toBe("renewed");
+    expect(String(fetch.mock.calls[0][1].body)).toContain(
+      "grant_type=refresh_token",
+    );
+    expect(await new Vault(store).load(account.id)).toEqual(
+      expect.objectContaining({ refresh: "new-refresh" }),
+    );
+  });
+  it("fails visibly rather than inventing credentials", async () => {
+    const auth = new Auth(store, { dropbox: "", onedrive: "" });
+    await expect(auth.connect("onedrive")).rejects.toThrow("not configured");
+    await expect(auth.token(account)).rejects.toThrow("Reconnect");
+  });
+  it("bounds Retry-After and omits cookies", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response("", { status: 429, headers: { "Retry-After": "120" } }),
+      );
+    vi.stubGlobal("fetch", fetch);
+    await expect(request("https://api.dropboxapi.com/test")).rejects.toThrow(
+      "rate limiting",
+    );
+    expect(fetch.mock.calls[0][1].credentials).toBe("omit");
+  });
+});
