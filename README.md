@@ -112,8 +112,16 @@ mix dialyzer
 (cd assets && npm run e2e)     # Playwright (starts the server itself)
 ```
 
-`config/runtime.exs` reads both public client IDs at runtime; neither is baked into the asset bundle.
-Missing/blank IDs disable that provider with **not configured**. `SECRET_KEY_BASE` is mandatory in production.
+`config/runtime.exs` supplies the public Dropbox and OneDrive application IDs by default; neither is baked into the
+asset bundle. Users can choose **Connect Dropbox** or **Connect OneDrive**, sign in in the provider popup and select a
+cloud folder. The app registrations must allow the redirect URIs and permissions listed under
+[Provider registrations](#provider-registrations); configured IDs alone do not prove real-account sign-in works.
+
+Set `DROPBOX_APP_KEY` or `MSAL_CLIENT_ID` to override the corresponding default at runtime. An unset variable uses the
+default; an explicitly empty or whitespace-only value disables the provider with **not configured**. For example,
+`DROPBOX_APP_KEY= MSAL_CLIENT_ID= mix phx.server` disables both. Restart the server after changing these settings.
+These are public application identifiers, not client secrets or account access tokens.
+`SECRET_KEY_BASE` is mandatory in production.
 After changing client assets, run `mix assets.build` (or `cd assets && npm run build`); no asset watcher is required.
 Make sure the version-manager shims precede Windows executables on WSL (`asdf exec mix`, `asdf exec npm` if needed).
 
@@ -172,10 +180,11 @@ The token is scoped to `marknotes`, not the organization; Fly's default expiry i
 replacement, storing it in the same GitHub secret, verifying deployment, then revoking the old token with the Fly CLI.
 Do not print tokens, commit them, or store them in local configuration files.
 
-Supply the public `DROPBOX_APP_KEY` and `MSAL_CLIENT_ID` as runtime Fly secrets through
-`fly secrets import --stage -a marknotes` (stdin `NAME=VALUE` pairs); no provider client secrets are needed.
-Without those IDs, the corresponding provider visibly shows **not configured**. Generate `SECRET_KEY_BASE` only for
-initial setup; preserve it on subsequent deployments.
+The public `DROPBOX_APP_KEY` and `MSAL_CLIENT_ID` have application defaults; no provider client secrets are needed.
+Existing Fly environment values/secrets override those defaults. To use different registrations, supply runtime
+overrides through `fly secrets import --stage -a marknotes` (stdin `NAME=VALUE` pairs); these IDs are public even when
+stored as Fly secrets. Explicit empty/whitespace values disable the corresponding provider.
+Generate `SECRET_KEY_BASE` only for initial setup; preserve it on subsequent deployments.
 
 Register the production redirect URIs `https://marknotes.fly.dev/oauth/dropbox` (Dropbox app) and
 `https://marknotes.fly.dev/oauth/onedrive` (Entra app, SPA platform); see [Provider registrations](#provider-registrations).
@@ -234,8 +243,8 @@ resolution. Automated mock results must not be reported as real-account sign-in 
 | --- | --- | --- |
 | `FLY_API_TOKEN` | GitHub repository secret | Deploy token (`fly tokens create deploy`) used by `deploy.yml`. |
 | `SECRET_KEY_BASE` | Fly secret | Phoenix secret. |
-| `DROPBOX_APP_KEY` | Fly secret | Dropbox app key (PKCE, no secret). Optional; without it Dropbox shows as not configured. |
-| `MSAL_CLIENT_ID` | Fly secret | Microsoft Entra application (client) ID. Optional; without it OneDrive shows as not configured. |
+| `DROPBOX_APP_KEY` | Optional Fly runtime override | Public Dropbox app key (PKCE, no secret). Unset uses the application default; explicit blank disables Dropbox. |
+| `MSAL_CLIENT_ID` | Optional Fly runtime override | Public Microsoft Entra client ID. Unset uses the application default; explicit blank disables OneDrive. |
 
 ### Provider registrations
 
@@ -245,6 +254,10 @@ resolution. Automated mock results must not be reported as real-account sign-in 
 - **OneDrive**: Entra app for personal and organizational accounts, with delegated `Files.ReadWrite` and `User.Read`, and a
   **Single-page application** platform with `https://marknotes.fly.dev/oauth/onedrive` and
   `http://localhost:4000/oauth/onedrive`.
+
+For Dropbox, confirm the app's development-user restrictions or production access allow the intended users.
+For Microsoft, confirm the registration accepts both personal and organizational accounts for the configured `common`
+authority. Redirect/consent changes require access to the provider consoles; the web app cannot register them itself.
 
 ## Proton follow-up requirements (not implemented)
 
@@ -258,6 +271,14 @@ resolution. Automated mock results must not be reported as real-account sign-in 
 First establish browser SRP/TOTP, session refresh/address-key unlocking, SDK encrypted upload/download and event feeds.
 API-supplied content-block URLs and the official guidelines' restrictions on endpoint proxying need a verified solution
 before shipping a relay; do not broaden the host allow-list or implement Drive crypto from scratch.
+
+Transport feasibility was checked on 2026-10-21: Chromium could read an unauthenticated request to
+`https://drive-api.proton.me/auth/v4/info` from `http://localhost:4000`, but the same request from
+`https://marknotes.fly.dev` failed CORS because the response did not allow that origin. The request used no user
+credentials; this proves neither sign-in nor encrypted Drive access. The official SDK excludes authentication,
+session management and address provisioning, and its guidelines prohibit modifying/proxying API endpoints to other
+domains. Production browser support therefore remains blocked pending a compliant transport and authentication
+solution; see [#1](https://github.com/MaxDac/marknotes-web/issues/1). No relay or working-looking Proton login is added.
 
 ## License
 
