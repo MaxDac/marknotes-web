@@ -99,9 +99,56 @@ then run `mix deps.get --only prod && mix compile && mix assets.deploy` before `
 
 - `checks.yml` (reusable) has five required checks: "Elixir (compile, format, credo, test)", "Dialyzer",
   "Assets (prettier, tsc, eslint, vitest)", "Browser E2E (Playwright)" and "Docker image build".
-- `pr-ci.yml` runs them on pull requests. `fly.yml` runs them on every push to `main` and deploys to Fly.io if they pass.
+- `pr-ci.yml` runs them on pull requests, plus "Dependency review" (fails on high-severity vulnerable dependencies) and
+  "actionlint" (workflow lint, including shellcheck of `run:` scripts).
+- `codeql.yml` runs CodeQL for `javascript-typescript` and `actions` on pull requests, pushes to `main` and weekly
+  (Elixir is not supported by CodeQL).
+- `dependabot-automerge.yml` enables squash auto-merge for Dependabot semver patch/minor updates; majors stay manual.
+  Requires "Allow auto-merge" in the repository settings; merges still wait for the required checks.
+- `fly.yml` runs the checks on every push to `main` and deploys to Fly.io if they pass.
 - `release.yml` is started manually with a `version` (`X.Y.Z`) and a `prerelease` flag. It runs the checks, publishes the
   `vX.Y.Z` GitHub Release and deploys that commit to Fly.
+- `deploy.yml` (reusable) is the single deploy job used by both. It fails early with a clear error if `FLY_API_TOKEN` is
+  missing, runs `flyctl deploy --remote-only --ha=false`, then smoke-tests `/health` and `/` with retries, asserting that
+  `/health` reports the deployed commit (`revision`) and, for releases, the release `version`. A job summary records the
+  URL, image label, version and commit.
+
+`/health` returns `{"status": "ok", "version": ..., "revision": ...}`. The version comes from `mix.exs`, which reads the
+`APP_VERSION` Docker build argument (set by `release.yml`) and otherwise defaults to `0.1.0`; the revision is the
+`GIT_SHA` build argument (`unknown` outside a deployed image).
+
+## Deployment and release
+
+### One-time setup
+
+```sh
+fly apps create marknotes-web                           # once; the app must exist before the first deploy
+fly secrets set -a marknotes-web SECRET_KEY_BASE="$(mix phx.gen.secret)"
+fly secrets set -a marknotes-web DROPBOX_APP_KEY=... MSAL_CLIENT_ID=...   # optional public client IDs
+fly tokens create deploy -a marknotes-web               # copy the token...
+gh secret set FLY_API_TOKEN -R MaxDac/marknotes-web     # ...and store it as the GitHub secret
+```
+
+Register the production redirect URIs `https://marknotes-web.fly.dev/oauth/dropbox` (Dropbox app) and
+`https://marknotes-web.fly.dev/oauth/onedrive` (Entra app, SPA platform); see [Provider registrations](#provider-registrations).
+
+### Cutting a release
+
+1. Make sure `main` is green and deployed.
+2. Actions → **Release** → *Run workflow* on `main`, with `version` = `X.Y.Z` (must not already be tagged) and
+   `prerelease` as appropriate.
+3. The workflow runs the checks, creates the `vX.Y.Z` tag and GitHub Release with generated notes, deploys with image label
+   `vX.Y.Z`, and verifies `/health` reports that version.
+
+### Rollback
+
+```sh
+fly releases -a marknotes-web --image                   # find the previous good image (e.g. label main-<sha> or vX.Y.Z)
+fly deploy -a marknotes-web --ha=false --image registry.fly.io/marknotes-web:<label>
+curl --fail https://marknotes-web.fly.dev/health        # confirm version/revision
+```
+
+Then revert or fix on `main`; the next push to `main` deploys again.
 
 ### Fly.io deployment and cost gate
 
@@ -116,7 +163,7 @@ deploys. See [current pricing](https://docs.fly.io/about/pricing). A 256 MB cont
 LiveView/browser smoke check (about 130 MiB container usage with both public provider IDs configured). This is not a production load guarantee;
 monitor memory after deployment and obtain approval before increasing the Machine size.
 
-The app/provider registrations/secrets are expected to exist already. Do not recreate them or rotate keys to deploy.
+Once the [one-time setup](#one-time-setup) is done, do not recreate the app/registrations or rotate keys to deploy.
 If the CLI cannot see `marknotes-web` or the repository deploy secret, restore the correct account/organization access
 before continuing. Read-only checks and an explicitly authorized manual deployment:
 
@@ -136,7 +183,7 @@ resolution. Automated mock results must not be reported as real-account sign-in 
 
 | Secret | Where | Purpose |
 | --- | --- | --- |
-| `FLY_API_TOKEN` | GitHub repository secret | Deploy token used by `fly.yml` and `release.yml`. |
+| `FLY_API_TOKEN` | GitHub repository secret | Deploy token (`fly tokens create deploy`) used by `deploy.yml`. |
 | `SECRET_KEY_BASE` | Fly secret | Phoenix secret. |
 | `DROPBOX_APP_KEY` | Fly secret | Dropbox app key (PKCE, no secret). Optional; without it Dropbox shows as not configured. |
 | `MSAL_CLIENT_ID` | Fly secret | Microsoft Entra application (client) ID. Optional; without it OneDrive shows as not configured. |

@@ -1,7 +1,13 @@
 defmodule MarknotesWeb.PageController do
   use MarknotesWeb, :controller
 
-  def health(conn, _params), do: json(conn, %{status: "ok"})
+  def health(conn, _params) do
+    json(conn, %{
+      status: "ok",
+      version: to_string(Application.spec(:marknotes, :vsn)),
+      revision: Application.get_env(:marknotes, :revision, "unknown")
+    })
+  end
 
   def callback(conn, %{"provider" => provider}) when provider in ["dropbox", "onedrive"] do
     conn

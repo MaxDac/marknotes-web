@@ -4,6 +4,9 @@ config :marknotes, :providers,
   dropbox: System.get_env("DROPBOX_APP_KEY", "") |> String.trim(),
   onedrive: System.get_env("MSAL_CLIENT_ID", "") |> String.trim()
 
+# Commit SHA baked into the release image (Dockerfile GIT_SHA); reported by /health.
+config :marknotes, :revision, System.get_env("GIT_SHA", "unknown") |> String.trim()
+
 if System.get_env("PHX_SERVER") do
   config :marknotes, MarknotesWeb.Endpoint, server: true
 end

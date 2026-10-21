@@ -10,8 +10,14 @@ defmodule MarknotesWeb.PageControllerTest do
     assert get_resp_header(conn, "cache-control") == ["no-store"]
   end
 
-  test "health is database-free", %{conn: conn} do
-    assert conn |> get("/health") |> json_response(200) == %{"status" => "ok"}
+  test "health is database-free and reports version and revision", %{conn: conn} do
+    previous = Application.get_env(:marknotes, :revision)
+    on_exit(fn -> Application.put_env(:marknotes, :revision, previous) end)
+    Application.put_env(:marknotes, :revision, "abc123")
+
+    version = to_string(Application.spec(:marknotes, :vsn))
+    health = conn |> get("/health") |> json_response(200)
+    assert health == %{"status" => "ok", "version" => version, "revision" => "abc123"}
   end
 
   test "public provider configuration is runtime supplied and optional", %{conn: conn} do
