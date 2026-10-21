@@ -78,19 +78,11 @@ jobs:
             "${flags[@]}"
 
   deploy:
-    name: Deploy to Fly.io
+    name: Deploy
     needs: [validate, release]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    concurrency: deploy-group
-    environment:
-      name: production
-      url: https://marknotes-web.fly.dev
-    env:
-      VERSION: ${{ needs.validate.outputs.version }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - run: flyctl deploy --remote-only --ha=false --image-label "v$VERSION"
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+    uses: ./.github/workflows/deploy.yml
+    with:
+      image-label: v${{ needs.validate.outputs.version }}
+      app-version: ${{ needs.validate.outputs.version }}
+    secrets:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

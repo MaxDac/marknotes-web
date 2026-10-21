@@ -4,7 +4,7 @@ defmodule Marknotes.MixProject do
   def project do
     [
       app: :marknotes,
-      version: "0.1.0",
+      version: version(),
       elixir: "~> 1.17",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -30,6 +30,14 @@ defmodule Marknotes.MixProject do
     [
       preferred_envs: [precommit: :test]
     ]
+  end
+
+  # Release builds pass APP_VERSION (Dockerfile build arg set by release.yml); other builds use the default.
+  defp version do
+    case String.trim(System.get_env("APP_VERSION", "")) do
+      "" -> "0.1.0"
+      version -> version
+    end
   end
 
   # Specifies which paths to compile per environment.
