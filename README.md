@@ -68,7 +68,39 @@ no server-side recovery. Private browsing may limit storage. WebCrypto, IndexedD
 
 ## Development
 
-Requirements: the Erlang, Elixir and Node.js versions in `.tool-versions` (asdf/mise).
+Requirements: [Mise](https://mise.jdx.dev/) (or asdf) and the Erlang, Elixir and Node.js versions in
+`.tool-versions`. Mise reads that file; `mise.toml` adds project tasks without duplicating the version pins.
+No database, Docker or cloud credentials are needed to run the local editor.
+
+On Linux, Mise may build Erlang from source. Install a C/C++ compiler, Make, Autoconf, Perl, OpenSSL development
+headers and ncurses development headers first. For example:
+
+```sh
+# Debian / Ubuntu
+sudo apt-get update
+sudo apt-get install build-essential autoconf m4 libncurses-dev libssl-dev perl
+
+# Arch Linux
+sudo pacman -S --needed base-devel ncurses openssl perl
+```
+
+From the repository root:
+
+```sh
+mise trust
+mise install                   # install the pinned runtimes (first Erlang build can take several minutes)
+mise run setup                 # bootstrap Hex/Rebar, install locked dependencies, build assets and compile
+mise run dev                   # rebuild and serve http://localhost:4000; Ctrl+C to stop
+```
+
+`mise run build` rebuilds without starting the server. `mise run check` runs formatting, Credo, ExUnit,
+Dialyzer and the asset checks. `mise run e2e` builds and runs Playwright; install Chromium first as described below
+and stop the development server because Playwright starts its own server on port 4000.
+The development server binds only to `127.0.0.1`. `curl --fail http://localhost:4000/health` checks readiness.
+Assets are built before launch, not watched; after editing client assets, rebuild and refresh the browser.
+
+The underlying commands remain available with the pinned runtimes active (`mise exec -- <command>` if Mise
+is not activated in your shell):
 
 ```sh
 mix setup                      # deps + assets

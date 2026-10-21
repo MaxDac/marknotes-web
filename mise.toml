@@ -1,0 +1,39 @@
+# Runtime versions stay in .tool-versions, shared with CI.
+
+[tasks.setup]
+description = "Install Hex, Rebar and project dependencies, then compile the app and assets"
+dir = "{{config_root}}"
+run = [
+  "mix local.hex --force",
+  "mix local.rebar --force",
+  "mix setup",
+  "mix compile --warnings-as-errors",
+]
+
+[tasks.build]
+description = "Compile the app and bundle browser assets"
+dir = "{{config_root}}"
+run = ["mix compile --warnings-as-errors", "mix assets.build"]
+
+[tasks.dev]
+description = "Build and serve the website at http://localhost:4000"
+dir = "{{config_root}}"
+depends = ["build"]
+run = "mix phx.server"
+
+[tasks.check]
+description = "Run Elixir and browser asset checks (excluding Playwright)"
+dir = "{{config_root}}"
+run = [
+  "mix format --check-formatted",
+  "mix credo --strict",
+  "mix test --warnings-as-errors",
+  "mix dialyzer",
+  "npm --prefix assets run check",
+]
+
+[tasks.e2e]
+description = "Build and run Playwright tests with their own local server"
+dir = "{{config_root}}"
+depends = ["build"]
+run = "npm --prefix assets run e2e"
