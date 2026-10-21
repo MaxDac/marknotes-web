@@ -29,9 +29,9 @@ jobs:
     concurrency: deploy-group
     environment:
       name: production
-      url: https://marknotes-web.fly.dev
+      url: https://marknotes.fly.dev
     env:
-      APP_URL: https://marknotes-web.fly.dev
+      APP_URL: https://marknotes.fly.dev
       IMAGE_LABEL: ${{ inputs.image-label }}
       APP_VERSION: ${{ inputs.app-version }}
     steps:
@@ -40,7 +40,7 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           if [ -z "$FLY_API_TOKEN" ]; then
-            echo "::error title=Missing FLY_API_TOKEN::The FLY_API_TOKEN secret is not set. Create one with 'fly tokens create deploy -a marknotes-web' and add it as a repository secret (see README > Deployment and release)."
+            echo "::error title=Missing FLY_API_TOKEN::The FLY_API_TOKEN secret is not set. Create one with 'fly tokens create deploy -a marknotes' and add it as a repository secret (see README > Deployment and release)."
             exit 1
           fi
 
