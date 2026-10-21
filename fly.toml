@@ -3,14 +3,14 @@
 #
 # Stateless app (no database): notes live in the browser's IndexedDB.
 
-app = 'marknotes-web'
+app = 'marknotes'
 primary_region = 'ams'
 kill_signal = 'SIGTERM'
 
 [build]
 
 [env]
-  PHX_HOST = 'marknotes-web.fly.dev'
+  PHX_HOST = 'marknotes.fly.dev'
   PORT = '8080'
 
 [http_service]

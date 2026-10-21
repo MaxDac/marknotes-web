@@ -4,7 +4,7 @@ Web markdown notes app built with Phoenix LiveView, with folders and sync to Dro
 OneDrive. It is the web sibling of the Android app [MaxDac/MarkNotes](https://github.com/MaxDac/MarkNotes) and the desktop app
 [MaxDac/marknotes-electron](https://github.com/MaxDac/marknotes-electron). It uses the Android format-1 sync layout.
 
-Production target: <https://marknotes-web.fly.dev>. Deployment and real-account sign-in verification are separate from
+Production target: <https://marknotes.fly.dev>. Deployment and real-account sign-in verification are separate from
 the automated provider tests.
 
 > **This is a third-party application not officially supported by Proton.**
@@ -121,16 +121,33 @@ then run `mix deps.get --only prod && mix compile && mix assets.deploy` before `
 
 ### One-time setup
 
-```sh
-fly apps create marknotes-web                           # once; the app must exist before the first deploy
-fly secrets set -a marknotes-web SECRET_KEY_BASE="$(mix phx.gen.secret)"
-fly secrets set -a marknotes-web DROPBOX_APP_KEY=... MSAL_CLIENT_ID=...   # optional public client IDs
-fly tokens create deploy -a marknotes-web               # copy the token...
-gh secret set FLY_API_TOKEN -R MaxDac/marknotes-web     # ...and store it as the GitHub secret
+```bash
+set -euo pipefail
+set +x
+fly apps create marknotes --org personal                # once; before merging changes that auto-deploy
+fly ips allocate-v4 --shared -a marknotes                # only if no shared IPv4 exists
+fly ips allocate-v6 -a marknotes                         # only if no IPv6 exists
+SECRET_KEY_BASE=$(openssl rand -hex 64)
+printf 'SECRET_KEY_BASE=%s\n' "$SECRET_KEY_BASE" | fly secrets import --stage -a marknotes
+unset SECRET_KEY_BASE
+fly tokens create deploy -a marknotes |
+  gh secret set FLY_API_TOKEN --repo MaxDac/marknotes-web
 ```
 
-Register the production redirect URIs `https://marknotes-web.fly.dev/oauth/dropbox` (Dropbox app) and
-`https://marknotes-web.fly.dev/oauth/onedrive` (Entra app, SPA platform); see [Provider registrations](#provider-registrations).
+Reuse the existing GitHub `production` environment; `deploy.yml` records the production URL there. No GitHub variables
+are required. Keep `FLY_API_TOKEN` as a repository secret so both reusable-workflow callers can forward it.
+The token is scoped to `marknotes`, not the organization; Fly's default expiry is 20 years. Rotate it by creating a
+replacement, storing it in the same GitHub secret, verifying deployment, then revoking the old token with the Fly CLI.
+Do not print tokens, commit them, or store them in local configuration files.
+
+Supply the public `DROPBOX_APP_KEY` and `MSAL_CLIENT_ID` as runtime Fly secrets through
+`fly secrets import --stage -a marknotes` (stdin `NAME=VALUE` pairs); no provider client secrets are needed.
+Without those IDs, the corresponding provider visibly shows **not configured**. Generate `SECRET_KEY_BASE` only for
+initial setup; preserve it on subsequent deployments.
+
+Register the production redirect URIs `https://marknotes.fly.dev/oauth/dropbox` (Dropbox app) and
+`https://marknotes.fly.dev/oauth/onedrive` (Entra app, SPA platform); see [Provider registrations](#provider-registrations).
+These changes require access to the provider registrations; `fly` and `gh` do not configure Dropbox or Entra.
 
 ### Cutting a release
 
@@ -143,9 +160,9 @@ Register the production redirect URIs `https://marknotes-web.fly.dev/oauth/dropb
 ### Rollback
 
 ```sh
-fly releases -a marknotes-web --image                   # find the previous good image (e.g. label main-<sha> or vX.Y.Z)
-fly deploy -a marknotes-web --ha=false --image registry.fly.io/marknotes-web:<label>
-curl --fail https://marknotes-web.fly.dev/health        # confirm version/revision
+fly releases -a marknotes --image                       # find the previous good image (e.g. label main-<sha> or vX.Y.Z)
+fly deploy -a marknotes --ha=false --image registry.fly.io/marknotes:<label>
+curl --fail https://marknotes.fly.dev/health             # confirm version/revision
 ```
 
 Then revert or fix on `main`; the next push to `main` deploys again.
@@ -164,16 +181,16 @@ LiveView/browser smoke check (about 130 MiB container usage with both public pro
 monitor memory after deployment and obtain approval before increasing the Machine size.
 
 Once the [one-time setup](#one-time-setup) is done, do not recreate the app/registrations or rotate keys to deploy.
-If the CLI cannot see `marknotes-web` or the repository deploy secret, restore the correct account/organization access
+If the CLI cannot see `marknotes` or the repository deploy secret, restore the correct account/organization access
 before continuing. Read-only checks and an explicitly authorized manual deployment:
 
 ```sh
-fly status -a marknotes-web
-fly secrets list -a marknotes-web
+fly status -a marknotes
+fly secrets list -a marknotes
 gh secret list -R MaxDac/marknotes-web
-fly deploy --remote-only --ha=false -a marknotes-web
-fly machine list -a marknotes-web
-curl --fail https://marknotes-web.fly.dev/health
+fly deploy --remote-only --ha=false -a marknotes
+fly machine list -a marknotes
+curl --fail https://marknotes.fly.dev/health
 ```
 
 Do not race a manual deploy with the main/release workflow. After deployment, verify the expected release SHA,
@@ -191,10 +208,10 @@ resolution. Automated mock results must not be reported as real-account sign-in 
 ### Provider registrations
 
 - **Dropbox**: app with "Full Dropbox" access and the scopes `account_info.read`, `files.metadata.read`,
-  `files.content.read` and `files.content.write`. Redirect URIs: `https://marknotes-web.fly.dev/oauth/dropbox` and
+  `files.content.read` and `files.content.write`. Redirect URIs: `https://marknotes.fly.dev/oauth/dropbox` and
   `http://localhost:4000/oauth/dropbox`.
 - **OneDrive**: Entra app for personal and organizational accounts, with delegated `Files.ReadWrite` and `User.Read`, and a
-  **Single-page application** platform with `https://marknotes-web.fly.dev/oauth/onedrive` and
+  **Single-page application** platform with `https://marknotes.fly.dev/oauth/onedrive` and
   `http://localhost:4000/oauth/onedrive`.
 
 ## Proton follow-up requirements (not implemented)

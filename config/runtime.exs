@@ -15,7 +15,7 @@ port = String.to_integer(System.get_env("PORT", "4000"))
 config :marknotes, MarknotesWeb.Endpoint, http: [port: port]
 
 if config_env() == :prod do
-  host = System.get_env("PHX_HOST", "marknotes-web.fly.dev")
+  host = System.get_env("PHX_HOST", "marknotes.fly.dev")
   local? = host in ["localhost", "127.0.0.1"]
 
   config :marknotes, MarknotesWeb.Endpoint,
