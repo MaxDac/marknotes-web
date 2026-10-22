@@ -145,18 +145,7 @@ const mappings: Record<string, Mapping> = {
  * Cases failing without a spec `knownDivergence.web` entry yet, as `file::case` → reason.
  * TODO: remove each entry once marknotes-spec records the divergence (or the web app is fixed).
  */
-const pending: Record<string, string> = {
-  "attachments/extension-for-type::case-insensitive":
-    "MIME types are matched case-sensitively (returns null)",
-  "manifest/parse::unknown keys are ignored":
-    "web rejects the whole manifest because sha256 is not 64 lowercase hex chars (returns null)",
-  "manifest/parse::missing files":
-    "web requires a files object and rejects the manifest (returns null)",
-  "manifest/parse::missing deviceId":
-    "web does not require deviceId (returns the manifest)",
-  "manifest/parse::missing updatedAt":
-    "web does not require updatedAt (returns the manifest)",
-};
+const pending: Record<string, string> = {};
 
 function fixtureFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
