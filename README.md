@@ -23,7 +23,9 @@ the automated provider tests.
   The UI needs a live server connection (LiveView), but your data persists locally.
 - **Editor**: raw markdown (CodeMirror 6) with a client-side preview (tables, strikethrough, task lists, highlighted code
   blocks). It has a formatting toolbar, continues lists, checkboxes and quotes on Enter, and autosaves.
-- **Appearance**: theme System, Light or Dark, and an accent colour from 8 palettes.
+- **Appearance**: a drive-style layout (sidebar folder tree, breadcrumb, toolbar, modal dialogs and menus built as custom
+  accessible components, no native prompts or selects). **Settings** offers theme System, Light or Dark, and an accent
+  colour from 9 palettes.
 - **Multi-drive two-way sync** with any number of Dropbox and OneDrive accounts. Sync runs in the browser,
   on load and on **Sync now**. It keeps the `.marknotes/manifest.json` manifest and reconciles local notes and every
   connected drive to the most recently edited version; the older version is kept as a `(conflicted copy)` note.
@@ -37,7 +39,7 @@ Out of scope: search, tags, attachments, background sync, offline UI, local note
 
 ### Notes and cloud folders
 
-Use **New folder** / **New note** in the selected folder. **Rename / move** accepts a path relative to the local root.
+Use **New** → **New note** / **New folder** in the selected folder. **Rename / move** accepts a path relative to the local root.
 Notes must end in `.md`; hidden names, traversal and moves into a folder's own descendants are rejected.
 The editor saves automatically and flushes before navigation or sync. Wait for **Saved in this browser** before closing
 the tab; a failed/stale save leaves the text in the editor and displays an error.
