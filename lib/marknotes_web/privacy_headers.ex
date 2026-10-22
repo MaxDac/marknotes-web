@@ -15,7 +15,7 @@ defmodule MarknotesWeb.PrivacyHeaders do
   # CodeMirror uses inline style attributes for layout, not inline scripts.
   defp policy do
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " <>
-      "img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; " <>
+      "img-src 'self' data: blob:; font-src 'self'; object-src 'none'; base-uri 'none'; " <>
       "frame-ancestors 'self'; form-action 'none'; " <>
       "connect-src 'self' ws: wss: https:; frame-src 'self' https://login.microsoftonline.com"
   end

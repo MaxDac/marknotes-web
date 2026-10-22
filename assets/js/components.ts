@@ -24,6 +24,8 @@ const paths = {
   check: "M5 12.5l4.5 4.5L19 7",
   plug: "M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 8l-4 4 4 4M6 12h10",
   lock: "M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3",
+  image: "M4 5h16v14H4zM4 16l5-5 4 4 2-2 5 5M15 9h.01",
+  copy: "M9 9h11v11H9zM5 15V4h11",
   alert:
     "M12 8v5M12 16h.01M10.3 4.3 2.6 18a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z",
 } as const;
@@ -40,14 +42,14 @@ export function icon(name: IconName): SVGSVGElement {
   return svg;
 }
 
-export function logo(): SVGSVGElement {
-  const svg = document.createElementNS(NS, "svg");
-  svg.setAttribute("viewBox", "0 0 32 32");
-  svg.setAttribute("aria-hidden", "true");
-  svg.setAttribute("class", "logo");
-  svg.innerHTML =
-    '<rect width="32" height="32" rx="9" fill="var(--accent)"/><path d="M9 22V10l7 8 7-8v12" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>';
-  return svg;
+/** The shared MarkNotes mark, generated from branding/marknotes-mark.svg. */
+export function logo(): HTMLImageElement {
+  const img = element("img", undefined, "logo");
+  img.src = "/images/marknotes-mark.svg";
+  img.alt = "";
+  img.width = 30;
+  img.height = 30;
+  return img;
 }
 
 export function element<K extends keyof HTMLElementTagNameMap>(

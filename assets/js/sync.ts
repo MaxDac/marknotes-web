@@ -8,6 +8,13 @@ import {
   syncable,
   type Note,
 } from "./storage";
+import {
+  attachmentHash,
+  inAttachments,
+  isAttachmentPath,
+  sha256,
+} from "./attachments";
+import { newId, noteId, withId } from "./notemeta";
 
 export interface Entry {
   path: string;
@@ -18,13 +25,16 @@ export interface Entry {
   /** Epoch ms of the last content change reported by the drive. */
   modifiedAt?: number;
 }
+/** Text notes are UTF-8 strings; attachments are raw bytes. */
+export type Content = string | Uint8Array<ArrayBuffer>;
 export interface Remote {
   snapshot(): Promise<Entry[]>;
   download(entry: Entry): Promise<string>;
-  /** Uploads text, recording `modifiedAt` as the file's modification time. */
+  downloadBytes(entry: Entry): Promise<Uint8Array<ArrayBuffer>>;
+  /** Uploads content, recording `modifiedAt` as the file's modification time. */
   upload(
     path: string,
-    text: string,
+    content: Content,
     previous?: Entry,
     modifiedAt?: number,
   ): Promise<Entry>;
@@ -66,7 +76,7 @@ function manifest(text: string | null): Manifest | null {
     !Object.entries(m.files).every(
       ([path, value]: [string, unknown]) =>
         syncable(path) &&
-        isNote(path) &&
+        (isNote(path) || isAttachmentPath(path)) &&
         typeof value === "object" &&
         value !== null &&
         "sha256" in value &&
@@ -94,6 +104,8 @@ export interface Outcome {
 export function localTime(note: Note, record?: RecordState): number {
   return note.modifiedAt ?? record?.syncedAt ?? 0;
 }
+const changed = (r: Entry, record: RecordState) =>
+  r.id !== record.remoteId || r.version !== record.version;
 function copyName(path: string, n: number): string {
   const dot = path.lastIndexOf(".");
   const stem = path.slice(0, dot),
@@ -113,13 +125,17 @@ export class SyncEngine {
   private async persist(): Promise<void> {
     await this.store.put(this.key, [...this.records.values()]);
   }
-  private async record(entry: Entry, text: string | null): Promise<void> {
+  private async record(
+    entry: Entry,
+    text: string | null,
+    digest?: string,
+  ): Promise<void> {
     this.records.set(entry.path, {
       path: entry.path,
       folder: entry.folder,
       remoteId: entry.id,
       version: entry.version,
-      hash: text === null ? "" : await hash(text),
+      hash: digest ?? (text === null ? "" : await hash(text)),
       syncedAt: Date.now(),
     });
     await this.persist();
@@ -135,10 +151,17 @@ export class SyncEngine {
     modifiedAt: number,
     remotePaths: Set<string>,
   ): Promise<string | null> {
+    // The copy is a distinct note, so it must not share the original's id.
+    if (noteId(text)) text = withId(text, newId());
     for (let n = 1; ; n++) {
       const candidate = copyName(path, n);
       const existing = await this.store.note(candidate);
-      if (existing && !existing.folder && existing.text === text) return null;
+      if (
+        existing &&
+        !existing.folder &&
+        withId(existing.text, "") === withId(text, "")
+      )
+        return null;
       if (existing || remotePaths.has(candidate)) continue;
       const entry = await this.remote.upload(
         candidate,
@@ -150,6 +173,64 @@ export class SyncEngine {
       await this.store.write(candidate, text, undefined, modifiedAt);
       await this.record(entry, text);
       return candidate;
+    }
+  }
+  /** Attachments are immutable and named by content hash: transfer or delete, never merge. */
+  private async attachments(
+    remote: Map<string, Entry>,
+    result: Outcome,
+  ): Promise<void> {
+    const local = new Set(await this.store.attachmentPaths());
+    const paths = [
+      ...new Set([
+        ...local,
+        ...remote.keys(),
+        ...[...this.records.keys()].filter(isAttachmentPath),
+      ]),
+    ].sort();
+    for (const path of paths) {
+      try {
+        const l = local.has(path),
+          r = remote.get(path),
+          record = this.records.get(path),
+          digest = attachmentHash(path)!;
+        if (!l && !r) await this.forget(path);
+        else if (l && r) {
+          if (!record || changed(r, record)) await this.record(r, null, digest);
+        } else if (l) {
+          if (record) {
+            await this.store.deleteAttachment(path);
+            await this.forget(path);
+            result.changes++;
+          } else {
+            const file = await this.store.attachment(path);
+            await this.record(
+              await this.remote.upload(
+                path,
+                file!.bytes,
+                undefined,
+                file!.modifiedAt,
+              ),
+              null,
+              digest,
+            );
+          }
+        } else if (r) {
+          if (record) {
+            await this.remote.delete(r);
+            await this.forget(path);
+          } else {
+            const bytes = await this.remote.downloadBytes(r);
+            if ((await sha256(bytes)) !== digest)
+              throw new Error("content does not match its name; skipped");
+            await this.store.putAttachment(path, bytes, r.modifiedAt);
+            await this.record(r, null, digest);
+            result.changes++;
+          }
+        }
+      } catch (error) {
+        result.errors.push(`${path}: ${message(error)}`);
+      }
     }
   }
   async run(): Promise<Outcome> {
@@ -164,7 +245,17 @@ export class SyncEngine {
     const entries = await this.remote.snapshot();
     const remote = new Map(
       entries
-        .filter((e) => syncable(e.path) && (e.folder || isNote(e.path)))
+        .filter(
+          (e) =>
+            syncable(e.path) &&
+            !inAttachments(e.path) &&
+            (e.folder || isNote(e.path)),
+        )
+        .map((e) => [e.path, e]),
+    );
+    const remoteAttachments = new Map(
+      entries
+        .filter((e) => !e.folder && isAttachmentPath(e.path))
         .map((e) => [e.path, e]),
     );
     const result: Outcome = { changes: 0, copies: [], errors: [] };
@@ -180,7 +271,9 @@ export class SyncEngine {
       skipped = new Set<string>();
     const paths = [
       ...new Set([...local.keys(), ...remote.keys(), ...this.records.keys()]),
-    ].sort();
+    ]
+      .filter((p) => !inAttachments(p))
+      .sort();
     for (const path of paths) {
       const l = local.get(path),
         r = remote.get(path);
@@ -193,8 +286,6 @@ export class SyncEngine {
     }
     const blocked = (path: string) =>
       [...skipped].some((s) => s === path || inside(s, path));
-    const changed = (r: Entry, record: RecordState) =>
-      r.id !== record.remoteId || r.version !== record.version;
     const folders = paths
       .filter(
         (p) =>
@@ -347,6 +438,7 @@ export class SyncEngine {
         result.errors.push(`${path}: ${message(error)}`);
       }
     }
+    await this.attachments(remoteAttachments, result);
     for (const [pending, localDelete] of [
       [pendingLocal, true],
       [pendingRemote, false],

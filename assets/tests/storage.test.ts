@@ -109,3 +109,69 @@ describe("credential vault", () => {
     await expect(vault.load("a")).rejects.toThrow("key is missing");
   });
 });
+
+describe("note ids and attachments storage", () => {
+  it("creates notes with an id and lazily assigns missing or duplicate ids", async () => {
+    await store.create("New.md", false);
+    expect((await store.note("New.md"))?.text).toMatch(
+      /^---\nid: [0-9a-z]{8}\n---\n$/,
+    );
+    await store.write("A.md", "---\nid: same1111\nkeep: 1\n---\nA");
+    await store.write("B.md", "---\nid: same1111\n---\nB");
+    await store.write("Legacy.md", "legacy body");
+    expect(await store.assignIds(["A.md"])).toEqual([]);
+    expect(await store.assignIds(["Legacy.md"])).toEqual(["Legacy.md"]);
+    expect((await store.note("Legacy.md"))?.text).toMatch(
+      /^---\nid: [0-9a-z]{8}\n---\nlegacy body$/,
+    );
+    expect(await store.assignIds()).toEqual(["B.md"]);
+    expect((await store.note("A.md"))?.text).toBe(
+      "---\nid: same1111\nkeep: 1\n---\nA",
+    );
+    expect((await store.note("B.md"))?.text).not.toContain("same1111");
+    expect(await store.assignIds()).toEqual([]);
+  });
+  it("reserves the root attachments folder", async () => {
+    await expect(store.create("attachments", true)).rejects.toThrow("reserved");
+    await store.write("n.md", "x");
+    await expect(store.move("n.md", "attachments/n.md")).rejects.toThrow(
+      "reserved",
+    );
+  });
+  it("stores attachment bytes separately from notes", async () => {
+    const path = `attachments/${"a".repeat(64)}.png`;
+    await store.putAttachment(path, new Uint8Array([1, 2, 3]));
+    expect((await store.attachment(path))?.bytes).toEqual(
+      new Uint8Array([1, 2, 3]),
+    );
+    expect(await store.attachmentPaths()).toEqual([path]);
+    expect(await store.list()).toEqual([]);
+    await store.deleteAttachment(path);
+    expect(await store.attachments()).toEqual([]);
+  });
+  it("upgrades version 1 databases without losing notes", async () => {
+    const name = crypto.randomUUID();
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.open(name, 1);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        db.createObjectStore("notes", { keyPath: "path" }).put({
+          path: "old.md",
+          folder: false,
+          text: "kept",
+          revision: "r",
+        });
+        db.createObjectStore("values");
+      };
+      request.onsuccess = () => {
+        request.result.close();
+        resolve();
+      };
+      request.onerror = () => reject(request.error);
+    });
+    const upgraded = await Store.open(name);
+    expect((await upgraded.note("old.md"))?.text).toBe("kept");
+    expect(await upgraded.attachments()).toEqual([]);
+    upgraded.close();
+  });
+});

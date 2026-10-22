@@ -1,6 +1,29 @@
 import { type EditorView } from "@codemirror/view";
 import { Auth, type PublicConfig } from "./auth";
-import { createEditor, format, preview, setEditorEditable } from "./editor";
+import {
+  createEditor,
+  format,
+  insert,
+  type Mention,
+  preview,
+  setEditorEditable,
+} from "./editor";
+import {
+  ACCEPTED_TYPES,
+  imageMarkdown,
+  inAttachments,
+  mimeFor,
+  processImage,
+  referencedAttachments,
+} from "./attachments";
+import {
+  filterRefs,
+  noteBody,
+  noteLink,
+  noteRefs,
+  type NoteRef,
+  withBody,
+} from "./notemeta";
 import {
   Store,
   type Note,
@@ -76,6 +99,13 @@ export class NotesUI {
   private accent = "violet";
   private disposed = false;
   private mediaListener = () => this.applyTheme();
+  private refs: NoteRef[] = [];
+  private urls = new Map<string, string>();
+  private mention: Mention | null = null;
+  private matches: NoteRef[] = [];
+  private active = 0;
+  private dismissed?: number;
+  private idsReady?: Promise<void>;
   private errorListener = (e: Event) =>
     this.error(String((e as CustomEvent<unknown>).detail));
   private unloadListener = (event: BeforeUnloadEvent) => {
@@ -131,7 +161,10 @@ export class NotesUI {
           </div>
           <section id="empty" class="empty"></section>
           <div class="panes">
-            <div class="pane"><div id="editor"></div></div>
+            <div class="pane editor-pane">
+              <div id="editor"></div>
+              <div id="mentions" class="mentions" role="listbox" aria-label="Link to a note" hidden></div>
+            </div>
             <article id="preview" class="pane preview" aria-label="Markdown preview"></article>
           </div>
         </div>
@@ -142,15 +175,50 @@ export class NotesUI {
       icon("lock"),
       element("span", "Notes are stored only in this browser"),
     );
-    this.editor = createEditor(this.get("#editor"), (text) => {
-      if (this.loading || !this.current) return;
-      this.dirty = true;
-      this.get("#preview").innerHTML = preview(text);
-      this.status("Unsaved changes");
-      clearTimeout(this.timer);
-      this.timer = setTimeout(() => {
-        void this.save().catch((e: unknown) => this.error(message(e)));
-      }, 400);
+    this.editor = createEditor(
+      this.get("#editor"),
+      (text) => {
+        if (this.loading || !this.current) return;
+        this.dirty = true;
+        this.renderPreview(text);
+        this.status("Unsaved changes");
+        clearTimeout(this.timer);
+        this.timer = setTimeout(() => {
+          void this.save().catch((e: unknown) => this.error(message(e)));
+        }, 400);
+      },
+      {
+        mention: {
+          update: (mention) => this.updateMention(mention),
+          key: (key) => this.mentionKey(key),
+        },
+        files: (files, position) => void this.insertImages(files, position),
+      },
+    );
+    this.get("#preview").addEventListener("click", (event) => {
+      const link = (event.target as Element).closest<HTMLElement>(
+        "a[data-note-id]",
+      );
+      if (!link) return;
+      event.preventDefault();
+      const ref = this.refs.find((r) => r.id === link.dataset.noteId);
+      if (ref) void this.run(() => this.open(ref.path));
+      else
+        this.error(
+          "Note not found. It may have been deleted or not synced yet.",
+        );
+    });
+    const picker = element("input", undefined, "sr-only");
+    picker.type = "file";
+    picker.accept = ACCEPTED_TYPES.join(",");
+    picker.multiple = true;
+    picker.tabIndex = -1;
+    picker.setAttribute("aria-hidden", "true");
+    picker.id = "image-file";
+    picker.addEventListener("change", () => {
+      const files = [...(picker.files ?? [])];
+      picker.value = "";
+      if (files.length) void this.insertImages(files, null);
     });
     this.setEditable(false);
     const act = (action: () => Promise<void>) => () => {
@@ -246,6 +314,14 @@ export class NotesUI {
       });
       this.get("#formatting").append(b);
     }
+    const image = button(
+      "Insert image",
+      () => {
+        if (this.current && !this.busy) picker.click();
+      },
+      { icon: "image", iconOnly: true, id: "insert-image" },
+    );
+    this.get("#formatting").append(image, picker);
     const empty = this.get("#empty");
     empty.append(
       element("div", undefined, "empty-art"),
@@ -292,7 +368,7 @@ export class NotesUI {
     }
     await this.refresh();
     const last = await this.store.value<string>("active-note");
-    if (last) await this.open(last);
+    if (last) await exclusive(() => this.open(last));
     else this.chrome();
     if ((await this.store.accounts()).length) await this.run(() => this.sync());
   }
@@ -356,6 +432,22 @@ export class NotesUI {
         ),
       ),
       section(
+        "Images",
+        element(
+          "p",
+          "Remove image files that no note references any more. Deletions reach your drives at the next sync.",
+          "hint",
+        ),
+        button(
+          "Clean unused images",
+          () => {
+            close();
+            void this.run(() => this.cleanImages());
+          },
+          { icon: "trash", variant: "outline", id: "clean-images" },
+        ),
+      ),
+      section(
         "Privacy",
         element(
           "p",
@@ -370,13 +462,194 @@ export class NotesUI {
   private setEditable(value: boolean): void {
     if (this.editor) setEditorEditable(this.editor, value);
   }
+  /** Shows the note body; front-matter stays hidden and is re-attached on save. */
   private showEditor(text: string): void {
+    const body = noteBody(text);
     this.loading = true;
     this.editor.dispatch({
-      changes: { from: 0, to: this.editor.state.doc.length, insert: text },
+      changes: { from: 0, to: this.editor.state.doc.length, insert: body },
     });
     this.loading = false;
-    this.get("#preview").innerHTML = preview(text);
+    this.renderPreview(body);
+  }
+  private renderPreview(body: string): void {
+    const ids = new Set(this.refs.map((r) => r.id));
+    const pane = this.get("#preview");
+    pane.innerHTML = preview(body, { resolve: (id) => ids.has(id) });
+    void this.hydrateImages(pane).catch((e: unknown) => this.error(message(e)));
+  }
+  private async hydrateImages(pane: HTMLElement): Promise<void> {
+    for (const img of pane.querySelectorAll<HTMLImageElement>(
+      "img[data-attachment]",
+    )) {
+      const path = img.dataset.attachment!;
+      let url = this.urls.get(path);
+      if (!url) {
+        const file = await this.store.attachment(path);
+        if (file) {
+          url = URL.createObjectURL(
+            new Blob([file.bytes], { type: mimeFor(path) }),
+          );
+          this.urls.set(path, url);
+        }
+      }
+      if (url) img.src = url;
+      else {
+        img.classList.add("missing");
+        img.title =
+          "Image not available in this browser yet. Sync to download it.";
+      }
+    }
+  }
+  private async insertImages(
+    files: File[],
+    position: number | null,
+  ): Promise<void> {
+    if (!this.current || this.busy) return;
+    try {
+      const lines: string[] = [];
+      for (const file of files) {
+        const image = await processImage(file);
+        await this.store.putAttachment(image.path, image.bytes);
+        lines.push(imageMarkdown(file.name || "image", image.path));
+      }
+      if (lines.length && this.current)
+        insert(this.editor, lines.join("\n"), position ?? undefined);
+    } catch (error) {
+      this.error(message(error));
+    }
+  }
+  private async cleanImages(): Promise<void> {
+    const ok = await confirmDialog({
+      title: "Clean unused images?",
+      text: "Images not referenced by any note in this browser will be deleted here and, at the next sync, from your drives. Sync first if other devices may have new notes.",
+      confirm: "Clean",
+      danger: true,
+    });
+    if (!ok) return;
+    const used = referencedAttachments(
+      (await this.store.list()).map((n) => n.text),
+    );
+    let removed = 0;
+    for (const path of await this.store.attachmentPaths())
+      if (!used.has(path)) {
+        await this.store.deleteAttachment(path);
+        const url = this.urls.get(path);
+        if (url) URL.revokeObjectURL(url);
+        this.urls.delete(path);
+        removed++;
+      }
+    this.status(
+      removed
+        ? `Removed ${removed} unused image${removed === 1 ? "" : "s"}`
+        : "No unused images",
+    );
+  }
+  private updateMention(mention: Mention | null): void {
+    if (!mention || mention.from !== this.dismissed) this.dismissed = undefined;
+    if (!mention || !this.current || this.dismissed !== undefined) {
+      this.closeMention();
+      return;
+    }
+    if (!this.mention) this.idsReady ??= this.prepareIds();
+    const matches = filterRefs(this.refs, mention.query);
+    // Typing a space with nothing matching means the @ was not meant as a link.
+    if (!matches.length && /\s/.test(mention.query)) {
+      this.closeMention();
+      return;
+    }
+    if (this.mention?.query !== mention.query) this.active = 0;
+    this.mention = mention;
+    this.matches = matches;
+    this.renderMentions();
+  }
+  /** Assigns ids to every note when the popup opens so all notes can be listed and linked. */
+  private async prepareIds(): Promise<void> {
+    try {
+      await this.save();
+      const changed = await exclusive(() => this.store.assignIds());
+      if (changed.length) {
+        const current = this.current;
+        if (current && changed.includes(current.path))
+          this.current = (await this.store.note(current.path)) ?? current;
+        await this.refresh();
+        this.chrome();
+      }
+      if (this.mention) this.updateMention(this.mention);
+    } catch (error) {
+      this.error(message(error));
+    } finally {
+      this.idsReady = undefined;
+    }
+  }
+  private closeMention(): void {
+    this.mention = null;
+    this.matches = [];
+    this.get("#mentions").hidden = true;
+  }
+  private renderMentions(): void {
+    const panel = this.get("#mentions");
+    panel.replaceChildren();
+    if (!this.matches.length)
+      panel.append(element("p", "No matching notes", "hint mention-empty"));
+    this.matches.slice(0, 50).forEach((ref, index) => {
+      const option = element("div", undefined, "mention");
+      option.id = `mention-${index}`;
+      option.setAttribute("role", "option");
+      option.setAttribute("aria-selected", String(index === this.active));
+      const text = element("div", undefined, "mention-text");
+      text.append(
+        element("strong", ref.title),
+        element("small", ref.label, "mention-path"),
+      );
+      const chip = element("span", undefined, "id-chip");
+      chip.append(
+        element("code", ref.id),
+        button(
+          `Copy id ${ref.id}`,
+          () => {
+            void navigator.clipboard
+              .writeText(ref.id)
+              .then(() => this.status(`Copied note id ${ref.id}`))
+              .catch((e: unknown) => this.error(message(e)));
+          },
+          { icon: "copy", iconOnly: true, className: "copy-id" },
+        ),
+      );
+      option.append(icon("file"), text, chip);
+      // Keep focus in the editor so typing continues to filter the list.
+      option.addEventListener("mousedown", (e) => e.preventDefault());
+      option.addEventListener("click", (e) => {
+        if (!(e.target as Element).closest(".copy-id")) this.chooseMention(ref);
+      });
+      panel.append(option);
+    });
+    panel.hidden = false;
+    panel
+      .querySelector(`#mention-${this.active}`)
+      ?.scrollIntoView({ block: "nearest" });
+  }
+  private mentionKey(key: "up" | "down" | "enter" | "escape"): boolean {
+    if (!this.mention) return false;
+    if (key === "escape") {
+      this.dismissed = this.mention.from;
+      this.closeMention();
+      return true;
+    }
+    const count = Math.min(this.matches.length, 50);
+    if (!count) return false;
+    if (key === "enter") this.chooseMention(this.matches[this.active]);
+    else {
+      this.active = (this.active + (key === "down" ? 1 : count - 1)) % count;
+      this.renderMentions();
+    }
+    return true;
+  }
+  private chooseMention(ref: NoteRef): void {
+    const mention = this.mention;
+    if (!mention) return;
+    this.closeMention();
+    insert(this.editor, noteLink(ref), mention.from, mention.to);
   }
   /** Updates the breadcrumb, selection and empty state to match the selection. */
   private chrome(): void {
@@ -426,12 +699,16 @@ export class NotesUI {
     clearTimeout(this.timer);
     if (!this.dirty || !this.current) return;
     const note = this.current,
-      text = this.editor.state.doc.toString();
+      body = this.editor.state.doc.toString();
     await exclusive(async () => {
-      const saved = await this.store.write(note.path, text, note.revision);
+      const saved = await this.store.write(
+        note.path,
+        withBody(note.text, body),
+        note.revision,
+      );
       if (this.current?.path === note.path) {
         this.current = saved;
-        if (this.editor.state.doc.toString() === text) this.dirty = false;
+        if (this.editor.state.doc.toString() === body) this.dirty = false;
       }
     });
     this.status(this.dirty ? "Unsaved changes" : "Saved in this browser");
@@ -463,6 +740,7 @@ export class NotesUI {
     this.chrome();
   }
   private async open(path: string): Promise<void> {
+    if ((await this.store.assignIds([path])).length) await this.refresh();
     const note = await this.store.note(path);
     this.selected = note ? path : "";
     this.current = note?.folder ? undefined : note;
@@ -524,7 +802,10 @@ export class NotesUI {
   private async refresh(): Promise<void> {
     const tree = this.get("#tree");
     tree.replaceChildren();
-    const notes = await this.store.list();
+    const notes = (await this.store.list()).filter(
+      (n) => !inAttachments(n.path),
+    );
+    this.refs = noteRefs(notes.filter((n) => !n.folder));
     for (const note of notes) {
       const parts = note.path.split("/");
       if (
@@ -795,6 +1076,7 @@ export class NotesUI {
     window.removeEventListener("marknotes:error", this.errorListener);
     window.removeEventListener("beforeunload", this.unloadListener);
     this.editor?.destroy();
+    for (const url of this.urls.values()) URL.revokeObjectURL(url);
     this.store?.close();
   }
 }
