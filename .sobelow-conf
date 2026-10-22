@@ -1,0 +1,15 @@
+[
+  verbose: false,
+  private: false,
+  skip: true,
+  router: "",
+  exit: "low",
+  format: "txt",
+  out: "",
+  threshold: "low",
+  # Config.CSP: the policy is set by MarknotesWeb.PrivacyHeaders, which Sobelow cannot see.
+  # Per-site false positives are marked inline with `# sobelow_skip [...]` comments instead.
+  ignore: ["Config.CSP"],
+  ignore_files: [],
+  version: false
+]

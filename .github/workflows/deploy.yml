@@ -17,6 +17,13 @@ on:
     secrets:
       FLY_API_TOKEN:
         required: false
+    outputs:
+      url:
+        description: Public URL of the deployed app
+        value: ${{ jobs.deploy.outputs.url }}
+      version:
+        description: Version reported by /health after the deploy
+        value: ${{ jobs.deploy.outputs.version }}
 
 permissions:
   contents: read
@@ -30,6 +37,9 @@ jobs:
     environment:
       name: production
       url: https://marknotes.fly.dev
+    outputs:
+      url: ${{ steps.smoke.outputs.url }}
+      version: ${{ steps.smoke.outputs.version }}
     env:
       APP_URL: https://marknotes.fly.dev
       IMAGE_LABEL: ${{ inputs.image-label }}
@@ -57,6 +67,7 @@ jobs:
           flyctl deploy "${args[@]}"
 
       - name: Smoke test
+        id: smoke
         run: |
           # Machines auto-stop, so the first requests may hit a cold start.
           ok=""
@@ -81,6 +92,10 @@ jobs:
           curl --silent --show-error --fail --retry 5 --retry-all-errors --retry-delay 5 --max-time 20 \
             --output /dev/null "$APP_URL/"
           echo "DEPLOYED_VERSION=$version" >> "$GITHUB_ENV"
+          {
+            echo "url=$APP_URL"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
           echo "Smoke test passed: $health"
 
       - name: Job summary

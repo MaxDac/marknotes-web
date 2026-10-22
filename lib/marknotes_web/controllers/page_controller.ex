@@ -9,6 +9,8 @@ defmodule MarknotesWeb.PageController do
     })
   end
 
+  # The body interpolates only a static verified route, never request data.
+  # sobelow_skip ["XSS.SendResp"]
   def callback(conn, %{"provider" => provider}) when provider in ["dropbox", "onedrive"] do
     conn
     |> MarknotesWeb.PrivacyHeaders.call([])
