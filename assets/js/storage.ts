@@ -1,4 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
+import { inAttachments } from "./attachments";
+import { idsToAssign, newId, newNoteText, withId } from "./notemeta";
 
 export interface Note {
   path: string;
@@ -23,8 +25,15 @@ export interface RecordState {
   hash: string;
   syncedAt: number;
 }
+/** An immutable binary file under `attachments/`, named by the SHA-256 of its bytes. */
+export interface Attachment {
+  path: string;
+  bytes: Uint8Array<ArrayBuffer>;
+  modifiedAt: number;
+}
 interface Schema extends DBSchema {
   notes: { key: string; value: Note };
+  attachments: { key: string; value: Attachment };
   values: { key: string; value: unknown };
 }
 
@@ -59,15 +68,24 @@ export function syncable(path: string): boolean {
   }
 }
 
+function reserved(path: string): void {
+  if (inAttachments(path))
+    throw new Error("The attachments folder is reserved for images.");
+}
+
 export class Store {
   constructor(private db: IDBPDatabase<Schema>) {}
   static async open(name = "marknotes"): Promise<Store> {
     return new Promise<Store>((resolve, reject) => {
       let blocked = false;
-      void openDB<Schema>(name, 1, {
-        upgrade(db) {
-          db.createObjectStore("notes", { keyPath: "path" });
-          db.createObjectStore("values");
+      void openDB<Schema>(name, 2, {
+        upgrade(db, oldVersion) {
+          if (oldVersion < 1) {
+            db.createObjectStore("notes", { keyPath: "path" });
+            db.createObjectStore("values");
+          }
+          if (oldVersion < 2)
+            db.createObjectStore("attachments", { keyPath: "path" });
         },
         blocked() {
           blocked = true;
@@ -172,9 +190,10 @@ export class Store {
   }
   async create(path: string, folder: boolean): Promise<void> {
     validatePath(path);
+    reserved(path);
     if (await this.note(path)) throw new Error("That name already exists.");
     if (!folder) {
-      await this.write(path, "");
+      await this.write(path, newNoteText());
       return;
     }
     const p = parent(path);
@@ -195,6 +214,7 @@ export class Store {
   }
   async move(from: string, to: string): Promise<void> {
     validatePath(to);
+    reserved(to);
     if (from === to) return;
     if (inside(from, to))
       throw new Error("Cannot move a folder inside itself.");
@@ -222,6 +242,49 @@ export class Store {
       });
     }
     await tx.done;
+  }
+  /**
+   * Gives a fresh id to notes in `scope` (all notes when omitted) that lack one or duplicate
+   * the id of an earlier note by sorted path. Returns the paths that were rewritten.
+   */
+  async assignIds(scope?: Iterable<string>): Promise<string[]> {
+    const tx = this.db.transaction("notes", "readwrite");
+    const notes = (await tx.store.getAll()).filter((n) => !n.folder);
+    const wanted = scope ? new Set(scope) : undefined;
+    const changed: string[] = [];
+    const now = Date.now();
+    for (const path of idsToAssign(notes)) {
+      if (wanted && !wanted.has(path)) continue;
+      const note = notes.find((n) => n.path === path)!;
+      await tx.store.put({
+        ...note,
+        text: withId(note.text, newId()),
+        revision: crypto.randomUUID(),
+        modifiedAt: now,
+      });
+      changed.push(path);
+    }
+    await tx.done;
+    return changed;
+  }
+  async attachments(): Promise<Attachment[]> {
+    return this.db.getAll("attachments");
+  }
+  async attachmentPaths(): Promise<string[]> {
+    return this.db.getAllKeys("attachments");
+  }
+  async attachment(path: string): Promise<Attachment | undefined> {
+    return this.db.get("attachments", path);
+  }
+  async putAttachment(
+    path: string,
+    bytes: Uint8Array<ArrayBuffer>,
+    modifiedAt = Date.now(),
+  ): Promise<void> {
+    await this.db.put("attachments", { path, bytes, modifiedAt });
+  }
+  async deleteAttachment(path: string): Promise<void> {
+    await this.db.delete("attachments", path);
   }
   async accounts(): Promise<Account[]> {
     return (await this.value<Account[]>("accounts")) ?? [];

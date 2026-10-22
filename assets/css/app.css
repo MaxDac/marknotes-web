@@ -989,3 +989,94 @@ a {
 .preview input[type="checkbox"] {
   accent-color: var(--accent);
 }
+
+/* @ note-link popup, docked at the bottom of the editor pane. */
+.editor-pane {
+  position: relative;
+  overflow: hidden;
+}
+.mentions {
+  position: absolute;
+  inset: auto 12px 12px;
+  z-index: 5;
+  max-height: min(280px, 50%);
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+.mention {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.mention:hover {
+  background: var(--hover);
+}
+.mention[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+.mention > .icon {
+  flex: none;
+  color: var(--weak);
+}
+.mention-text {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+.mention-text > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-path {
+  color: var(--weak);
+}
+.id-chip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  padding-left: 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--sidebar);
+  font-size: 12px;
+}
+.id-chip .btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+}
+.mention-empty {
+  margin: 0;
+  padding: 8px;
+}
+.preview a.note-link {
+  color: var(--accent);
+  text-decoration-style: dotted;
+}
+.preview a.note-link.broken {
+  color: var(--danger);
+  text-decoration-line: line-through;
+  cursor: not-allowed;
+}
+.preview img.attachment {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+.preview img.attachment.missing {
+  display: inline-block;
+  padding: 4px 8px;
+  border: 1px dashed var(--line-strong);
+  color: var(--hint);
+  font-style: italic;
+}

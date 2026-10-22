@@ -1,6 +1,6 @@
 import { Auth, ApiError, request } from "./auth";
 import { type Account, join, inside } from "./storage";
-import { type Entry, type Remote, ensureParents } from "./sync";
+import { type Content, type Entry, type Remote, ensureParents } from "./sync";
 
 export interface CloudFolder {
   path: string;
@@ -33,6 +33,8 @@ interface DropboxPage {
   cursor: string;
   has_more: boolean;
 }
+const encode = (content: Content): Uint8Array<ArrayBuffer> =>
+  typeof content === "string" ? new TextEncoder().encode(content) : content;
 function headerJson(value: unknown): string {
   return JSON.stringify(value).replace(
     /[\u007f-\uffff]/g,
@@ -152,9 +154,12 @@ export class Dropbox implements Drive {
     );
   }
   async download(entry: Entry): Promise<string> {
-    return this.downloadPath(entry.id);
+    return (await this.fetchPath(entry.id)).text();
   }
-  private async downloadPath(path: string): Promise<string> {
+  async downloadBytes(entry: Entry): Promise<Uint8Array<ArrayBuffer>> {
+    return new Uint8Array(await (await this.fetchPath(entry.id)).arrayBuffer());
+  }
+  private async fetchPath(path: string): Promise<Response> {
     const r = await this.auth.authorized(
       this.account,
       "https://content.dropboxapi.com/2/files/download",
@@ -169,11 +174,11 @@ export class Dropbox implements Drive {
         throw new ApiError(404, "Dropbox");
       throw new ApiError(r.status, "Dropbox");
     }
-    return r.text();
+    return r;
   }
   private async put(
     path: string,
-    text: string,
+    content: Content,
     mode: unknown,
     modifiedAt?: number,
   ): Promise<DropboxItem> {
@@ -195,7 +200,7 @@ export class Dropbox implements Drive {
               : { client_modified: dropboxTime(modifiedAt) }),
           }),
         },
-        body: new TextEncoder().encode(text),
+        body: encode(content),
       },
     );
     if (!r.ok) throw new ApiError(r.status, "Dropbox");
@@ -203,7 +208,7 @@ export class Dropbox implements Drive {
   }
   async upload(
     path: string,
-    text: string,
+    content: Content,
     previous?: Entry,
     modifiedAt?: number,
   ): Promise<Entry> {
@@ -211,7 +216,7 @@ export class Dropbox implements Drive {
     return this.remember(
       await this.put(
         path,
-        text,
+        content,
         previous ? { ".tag": "update", update: previous.version } : "add",
         modifiedAt,
       ),
@@ -239,7 +244,9 @@ export class Dropbox implements Drive {
   }
   async readManifest(): Promise<string | null> {
     try {
-      return await this.downloadPath(this.absolute(".marknotes/manifest.json"));
+      return await (
+        await this.fetchPath(this.absolute(".marknotes/manifest.json"))
+      ).text();
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) return null;
       throw error;
@@ -414,6 +421,12 @@ export class OneDrive implements Drive {
     return this.entries();
   }
   async download(entry: Entry): Promise<string> {
+    return (await this.fetchContent(entry)).text();
+  }
+  async downloadBytes(entry: Entry): Promise<Uint8Array<ArrayBuffer>> {
+    return new Uint8Array(await (await this.fetchContent(entry)).arrayBuffer());
+  }
+  private async fetchContent(entry: Entry): Promise<Response> {
     const node = await this.api<GraphItem>(
       `/me/drive/items/${encodeURIComponent(entry.id)}`,
     );
@@ -422,7 +435,7 @@ export class OneDrive implements Drive {
       throw new Error("OneDrive returned no secure download URL.");
     const r = await request(url);
     if (!r.ok) throw new ApiError(r.status, "OneDrive download");
-    return r.text();
+    return r;
   }
   private itemEntry(node: GraphItem, path: string): Entry {
     this.nodes.set(node.id, node);
@@ -437,7 +450,7 @@ export class OneDrive implements Drive {
   }
   async upload(
     path: string,
-    text: string,
+    content: Content,
     previous?: Entry,
     modifiedAt?: number,
   ): Promise<Entry> {
@@ -457,7 +470,7 @@ export class OneDrive implements Drive {
         "Content-Type": "application/octet-stream",
         ...(previous ? { "If-Match": previous.tag! } : {}),
       },
-      body: new TextEncoder().encode(text),
+      body: encode(content),
     });
     if (modifiedAt !== undefined)
       // Preserve the edit time so other devices can tell which version is newest.

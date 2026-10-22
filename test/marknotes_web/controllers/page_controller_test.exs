@@ -10,6 +10,12 @@ defmodule MarknotesWeb.PageControllerTest do
     assert get_resp_header(conn, "cache-control") == ["no-store"]
   end
 
+  test "CSP allows local attachment blob images but no remote images", %{conn: conn} do
+    [csp] = conn |> get("/") |> get_resp_header("content-security-policy")
+    assert csp =~ "img-src 'self' data: blob:;"
+    refute csp =~ ~r/img-src[^;]*https?:/
+  end
+
   test "health is database-free and reports version and revision", %{conn: conn} do
     previous = Application.get_env(:marknotes, :revision)
     on_exit(fn -> Application.put_env(:marknotes, :revision, previous) end)

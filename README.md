@@ -23,6 +23,11 @@ the automated provider tests.
   The UI needs a live server connection (LiveView), but your data persists locally.
 - **Editor**: raw markdown (CodeMirror 6) with a client-side preview (tables, strikethrough, task lists, highlighted code
   blocks). It has a formatting toolbar, continues lists, checkboxes and quotes on Enter, and autosaves.
+- **Note links**: type `@` to pick a note from a panel listing every note's title, path and stable id (with a copy
+  button); it inserts a `[Title](marknotes:id)` link that opens the note from the preview, even after renames or moves.
+- **Images**: insert PNG, JPEG, GIF or WebP images with the toolbar, paste or drag-and-drop. They are downscaled to at
+  most 2048 px, stored in the root `attachments/` folder, synced to every drive, and can be cleaned up from **Settings**.
+  See [docs/note-format.md](docs/note-format.md) for the shared note, link and attachment format.
 - **Appearance**: a drive-style layout (sidebar folder tree, breadcrumb, toolbar, modal dialogs and menus built as custom
   accessible components, no native prompts or selects). **Settings** offers theme System, Light or Dark, and an accent
   colour from 9 palettes.
@@ -35,7 +40,7 @@ the automated provider tests.
   expiry; Microsoft SSO is attempted for renewal, and **Reconnect** is required if third-party-cookie/session restrictions
   prevent silent sign-in. No unsupported MSAL cache serialization is used.
 
-Out of scope: search, tags, attachments, background sync, offline UI, local note encryption.
+Out of scope: search, tags, background sync, offline UI, local note encryption.
 
 ### Notes and cloud folders
 
@@ -59,12 +64,15 @@ edit is lost. Local edit times are recorded per note; drive times come from Drop
 `fileSystemInfo.lastModifiedDateTime`, which the web app sets on upload. Equal times prefer the local version. Results
 depend on device clocks being roughly correct. Edits survive opposing deletions.
 Three reconciliation passes per drive bound a multi-drive run; errors and incomplete convergence are reported.
+Images in `attachments/` sync as immutable binary files named by their SHA-256: they are uploaded, downloaded or
+deleted, never merged.
 
 ### Privacy and durability
 
 Notes, paths, provider tokens and editing events are not sent to Phoenix or stored in server sessions.
 Cloud API calls go directly to the provider. OneDrive preauthenticated download URLs receive no Graph bearer header.
-Markdown preview disables embedded images, raw HTML and unsafe links; code blocks are highlighted locally.
+Markdown preview blocks remote images, raw HTML and unsafe links; it only shows images from the local `attachments/`
+folder, as `blob:` URLs. Code blocks are highlighted locally.
 OAuth callbacks are minimal client pages, not LiveViews, and authorization parameters are filtered from Phoenix logs.
 The encryption key is non-extractable but is stored beside the encrypted credentials: it does **not** defend against
 same-origin XSS or protect plaintext notes. Clearing site data/browser profiles removes notes and credentials; there is

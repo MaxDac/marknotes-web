@@ -185,7 +185,7 @@ test("Dropbox PKCE popup and direct browser sync", async ({
   await expect(page.locator("#status")).toContainText("Saved in this browser");
   await page.getByRole("button", { name: "Sync now" }).click();
   await expect(page.locator("#status")).toContainText("Sync finished");
-  expect(cloud).toBe("browser-only note");
+  expect(cloud).toMatch(/^---\nid: [0-9a-z]{8}\n---\nbrowser-only note$/);
   expect(JSON.parse(manifest).format).toBe(1);
   cloud = "remote edit";
   revision++;
@@ -356,7 +356,8 @@ test("OneDrive direct download, guarded writes and newest-wins reconciliation", 
   await expect(page.locator("#tree")).toContainText(
     "Shared (conflicted copy).md",
   );
-  expect(copy).toBe("mine");
+  // Opening the note gave it an id; the conflicted copy gets its own id.
+  expect(copy).toMatch(/^---\nid: [0-9a-z]{8}\n---\nmine$/);
   expect(content).toBe("theirs");
   expect(patches).toContain("copy");
 });
@@ -435,4 +436,49 @@ test("menus, dialogs and settings work from the keyboard", async ({ page }) => {
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
+});
+
+test("@ note links and local images", async ({ page }) => {
+  await page.goto("/");
+  await create(page, "New folder", "Work");
+  await create(page, "New note", "Plan.md");
+  const editor = page.getByRole("textbox", { name: "Markdown editor" });
+  await editor.fill("The plan");
+  await create(page, "New note", "Index.md");
+  await editor.click();
+  await page.keyboard.type("See @pla");
+  const popup = page.getByRole("listbox", { name: "Link to a note" });
+  await expect(popup).toBeVisible();
+  const option = popup.getByRole("option", { name: /Plan/ });
+  await expect(option).toContainText("Work/Plan");
+  await expect(option.locator(".id-chip code")).toHaveText(/^[0-9a-z]{8}$/);
+  await page.keyboard.press("Enter");
+  await expect(popup).toBeHidden();
+  await expect(editor).toContainText(/See \[Plan\]\(marknotes:[0-9a-z]{8}\)/);
+  await expect(editor).not.toContainText("id:");
+  await page.keyboard.type(" [Gone](marknotes:zzzzzzzz)");
+  const broken = page.locator("#preview a.note-link.broken");
+  await expect(broken).toHaveAttribute("title", "Note not found");
+  await page.locator("#preview a.note-link:not(.broken)").click();
+  await expect(page.locator("#title")).toContainText("Plan.md");
+  await expect(editor).toContainText("The plan");
+
+  // 1x1 transparent PNG
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  await editor.click();
+  await page.keyboard.press("Control+End");
+  await page
+    .locator("#image-file")
+    .setInputFiles({ name: "dot.png", mimeType: "image/png", buffer: png });
+  await expect(editor).toContainText(
+    /!\[dot\]\(attachments\/[0-9a-f]{64}\.png\)/,
+  );
+  await expect(page.locator("#preview img.attachment")).toHaveAttribute(
+    "src",
+    /^blob:/,
+  );
+  await expect(page.locator("#tree")).not.toContainText("attachments");
 });

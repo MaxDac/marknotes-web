@@ -132,6 +132,18 @@ describe("sync decision matrix", () => {
     expect(remote.data.get("n.md")?.text).toBe("mine");
     expect((await store.note("n (conflicted copy).md"))?.text).toBe("theirs");
   });
+  it("gives conflicted copies their own id so links keep targeting the original", async () => {
+    await store.write("n.md", "---\nid: orig1234\n---\nmine", undefined, 1000);
+    await remote.edit("n.md", "---\nid: orig1234\n---\ntheirs", 2000);
+    await engine.run();
+    const copy = (await store.note("n (conflicted copy).md"))!.text;
+    expect(copy).toMatch(/^---\nid: [0-9a-z]{8}\n---\nmine$/);
+    expect(copy).not.toContain("orig1234");
+    expect((await store.note("n.md"))?.text).toContain("orig1234");
+    await store.write("n.md", "---\nid: orig1234\n---\nmine", undefined, 3000);
+    await remote.edit("n.md", "---\nid: orig1234\n---\nnewest", 4000);
+    expect((await engine.run()).copies).toEqual([]);
+  });
   it("does not duplicate an identical conflicted copy", async () => {
     await store.write("n.md", "mine", undefined, 1000);
     await remote.edit("n.md", "theirs", 2000);

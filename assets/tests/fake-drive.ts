@@ -1,6 +1,10 @@
-import type { Entry, Remote } from "../js/sync";
+import type { Content, Entry, Remote } from "../js/sync";
 export class FakeDrive implements Remote {
-  data = new Map<string, { entry: Entry; text: string }>();
+  data = new Map<
+    string,
+    { entry: Entry; text: string; bytes?: Uint8Array<ArrayBuffer> }
+  >();
+  uploads: string[] = [];
   manifest: string | null = null;
   writes = 0;
   revision = 0;
@@ -12,9 +16,13 @@ export class FakeDrive implements Remote {
   async download(entry: Entry): Promise<string> {
     return this.data.get(entry.path)!.text;
   }
+  async downloadBytes(entry: Entry): Promise<Uint8Array<ArrayBuffer>> {
+    const item = this.data.get(entry.path)!;
+    return item.bytes ?? new TextEncoder().encode(item.text);
+  }
   async upload(
     path: string,
-    text: string,
+    content: Content,
     previous?: Entry,
     modifiedAt = Date.now(),
   ): Promise<Entry> {
@@ -28,7 +36,13 @@ export class FakeDrive implements Remote {
       version: String(++this.revision),
       modifiedAt,
     };
-    this.data.set(path, { entry, text });
+    this.uploads.push(path);
+    this.data.set(
+      path,
+      typeof content === "string"
+        ? { entry, text: content }
+        : { entry, text: "", bytes: content },
+    );
     return entry;
   }
   async mkdir(path: string): Promise<Entry> {
