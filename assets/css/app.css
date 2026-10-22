@@ -1084,3 +1084,312 @@ a {
   color: var(--hint);
   font-style: italic;
 }
+
+/* Chord sequences (notes with front-matter `type: chords`) */
+.mode-slot {
+  display: none;
+}
+.has-note.chord-file .mode-slot {
+  display: flex;
+}
+.chord-mode .formatting {
+  visibility: hidden;
+}
+.chord-banner {
+  margin: 0;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--fg);
+  font-size: 13px;
+}
+.chord-pane {
+  display: none;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.has-note.chord-mode .chord-pane {
+  display: block;
+}
+.has-note.chord-mode .panes {
+  display: none;
+}
+.chord-editor {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  min-height: 100%;
+}
+.chord-sequence {
+  padding: 16px;
+  border-right: 1px solid var(--line);
+}
+.chord-sequence-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.chord-sequence-head .section-title,
+.chord-form .section-title {
+  margin: 0;
+}
+.chord-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.chord-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.chord-item[aria-current="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.chord-open {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 2px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.chord-open:hover {
+  background: var(--hover);
+}
+.chord-item-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.chord-item-text strong,
+.chord-tags {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chord-chip,
+.chord-tags {
+  color: var(--weak);
+  font-size: 12px;
+}
+.chord-item-actions {
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+}
+.chord-item-actions .btn-icon {
+  width: 28px;
+  height: 28px;
+  color: var(--weak);
+}
+.chord-empty {
+  padding: 8px 0;
+}
+.chord-preview {
+  position: relative;
+  flex: none;
+  padding: 4px 4px 4px 2px;
+}
+.chord-preview-position {
+  position: absolute;
+  top: -2px;
+  right: 2px;
+  color: var(--weak);
+  font-size: 10px;
+}
+.chord-preview-grid {
+  display: flex;
+  flex-direction: column;
+}
+.chord-preview-row {
+  display: flex;
+  align-items: center;
+}
+.chord-preview-indicator {
+  width: 12px;
+  color: var(--weak);
+  font-size: 10px;
+  line-height: 11px;
+  text-align: center;
+}
+.chord-preview-frets {
+  display: flex;
+  background: linear-gradient(var(--line-strong), var(--line-strong)) center /
+    100% 1px no-repeat;
+}
+.chord-preview-cell {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 11px;
+  border-right: 1px solid var(--line-strong);
+}
+.chord-preview-cell:first-child {
+  border-left: 2px solid var(--line-strong);
+}
+.chord-preview-dot {
+  display: grid;
+  place-items: center;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 8px;
+  font-weight: 700;
+}
+.chord-form {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 20px 24px;
+}
+.chord-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 16px;
+}
+.chord-form-row .field:first-child {
+  flex: 1;
+  min-width: 180px;
+}
+.chord-form .field-error {
+  margin: 0;
+}
+.chord-note {
+  height: auto;
+  min-height: 72px;
+  padding: 8px 12px;
+  resize: vertical;
+}
+.chord-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.fretboard-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.fretboard-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.fretboard {
+  --cols: 56px 40px 40px repeat(var(--frets), 40px) 64px;
+  width: max-content;
+  padding: 8px;
+}
+.fret-header,
+.string-row {
+  display: grid;
+  grid-template-columns: var(--cols);
+  align-items: center;
+}
+.fret-header {
+  color: var(--hint);
+  font-size: 11px;
+  text-align: center;
+}
+.fret-header .marker {
+  color: var(--fg);
+  font-weight: 700;
+}
+.fret-header .red-line-fret {
+  color: var(--danger);
+}
+.string-row {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.tuning-label {
+  font-size: 13px;
+}
+.string-row > button {
+  height: 32px;
+  margin: 2px 0;
+  border: 0;
+  border-right: 1px solid var(--line-strong);
+  background: linear-gradient(var(--line-strong), var(--line-strong)) center /
+    100% 2px no-repeat;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.string-row > button:hover {
+  background-color: var(--hover);
+}
+.string-row > button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.string-row > .mute,
+.string-row > .open {
+  border-right: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--weak);
+}
+.string-row > .open {
+  border-right: 3px solid var(--fg);
+  border-radius: 6px 0 0 6px;
+}
+.string-row > .mute.selected {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+}
+.string-row > .open.selected {
+  background-color: var(--accent-soft);
+  color: var(--accent);
+}
+.string-row > .marker-fret {
+  background-color: color-mix(in srgb, var(--hover) 70%, transparent);
+}
+.string-row > .red-line-fret {
+  border-right: 2px solid var(--danger);
+}
+.string-row > .fret.selected {
+  background: radial-gradient(circle, var(--accent) 0 12px, transparent 12.5px);
+  color: var(--on-accent);
+}
+.string-row > .finger {
+  height: 32px;
+  margin-left: 8px;
+  padding: 0 6px;
+}
+
+@media (max-width: 860px) {
+  .chord-editor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .chord-sequence {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+}

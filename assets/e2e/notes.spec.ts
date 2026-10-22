@@ -395,6 +395,10 @@ test("menus, dialogs and settings work from the keyboard", async ({ page }) => {
   await expect(page.getByRole("menuitem", { name: "New note" })).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(
+    page.getByRole("menuitem", { name: "New chord sequence" }),
+  ).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(
     page.getByRole("menuitem", { name: "New folder" }),
   ).toBeFocused();
   await page.keyboard.press("Escape");

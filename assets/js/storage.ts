@@ -188,12 +188,12 @@ export class Store {
     await tx.done;
     return note;
   }
-  async create(path: string, folder: boolean): Promise<void> {
+  async create(path: string, folder: boolean, text?: string): Promise<void> {
     validatePath(path);
     reserved(path);
     if (await this.note(path)) throw new Error("That name already exists.");
     if (!folder) {
-      await this.write(path, newNoteText());
+      await this.write(path, text ?? newNoteText());
       return;
     }
     const p = parent(path);

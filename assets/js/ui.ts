@@ -37,6 +37,15 @@ import {
 import { drive, type Drive } from "./providers";
 import { syncAll, message } from "./sync";
 import {
+  chordLineEnding,
+  isChordSequence,
+  newChordSequenceText,
+  parseChordBody,
+  serializeChordBody,
+  type ChordSequence,
+} from "./chords";
+import { ChordEditor } from "./chord-editor";
+import {
   ask,
   button,
   checked,
@@ -84,6 +93,9 @@ export class NotesUI {
   private store!: Store;
   private auth!: Auth;
   private editor!: EditorView;
+  private chordEditor?: ChordEditor;
+  /** The user chose "View as text" for the open chord sequence. */
+  private textView = false;
   private current?: Note;
   private selected = "";
   private dirty = false;
@@ -109,7 +121,7 @@ export class NotesUI {
   private errorListener = (e: Event) =>
     this.error(String((e as CustomEvent<unknown>).detail));
   private unloadListener = (event: BeforeUnloadEvent) => {
-    if (this.dirty) {
+    if (this.dirty || this.chordEditor?.dirty) {
       event.preventDefault();
       event.returnValue = "";
     }
@@ -157,8 +169,10 @@ export class NotesUI {
           </header>
           <div class="toolbar">
             <nav id="formatting" class="formatting" aria-label="Formatting"></nav>
+            <div id="mode-slot" class="mode-slot"></div>
             <div id="item-actions" class="item-actions"></div>
           </div>
+          <p id="chord-banner" class="chord-banner" role="status" hidden></p>
           <section id="empty" class="empty"></section>
           <div class="panes">
             <div class="pane editor-pane">
@@ -167,6 +181,7 @@ export class NotesUI {
             </div>
             <article id="preview" class="pane preview" aria-label="Markdown preview"></article>
           </div>
+          <section id="chord-pane" class="chord-pane" aria-label="Chord editor"></section>
         </div>
       </fieldset>
       <div id="error" class="toast" role="alert" hidden></div>`;
@@ -181,11 +196,7 @@ export class NotesUI {
         if (this.loading || !this.current) return;
         this.dirty = true;
         this.renderPreview(text);
-        this.status("Unsaved changes");
-        clearTimeout(this.timer);
-        this.timer = setTimeout(() => {
-          void this.save().catch((e: unknown) => this.error(message(e)));
-        }, 400);
+        this.scheduleSave();
       },
       {
         mention: {
@@ -221,6 +232,18 @@ export class NotesUI {
       if (files.length) void this.insertImages(files, null);
     });
     this.setEditable(false);
+    this.chordEditor = new ChordEditor({
+      onChange: (sequence) => this.chordsChanged(sequence),
+      status: (text) => this.status(text),
+    });
+    this.get("#chord-pane").append(this.chordEditor.root);
+    this.get("#mode-slot").append(
+      button("View as text", () => void this.toggleView(), {
+        icon: "code",
+        variant: "outline",
+        id: "view-mode",
+      }),
+    );
     const act = (action: () => Promise<void>) => () => {
       void this.run(action);
     };
@@ -237,6 +260,11 @@ export class NotesUI {
             label: "New note",
             icon: "file",
             action: act(() => this.create(false)),
+          },
+          {
+            label: "New chord sequence",
+            icon: "chords",
+            action: act(() => this.create(false, true)),
           },
           {
             label: "New folder",
@@ -463,7 +491,7 @@ export class NotesUI {
     if (this.editor) setEditorEditable(this.editor, value);
   }
   /** Shows the note body; front-matter stays hidden and is re-attached on save. */
-  private showEditor(text: string): void {
+  private showEditor(text: string, keepDraft = false): void {
     const body = noteBody(text);
     this.loading = true;
     this.editor.dispatch({
@@ -471,6 +499,76 @@ export class NotesUI {
     });
     this.loading = false;
     this.renderPreview(body);
+    this.applyMode(keepDraft);
+  }
+  private scheduleSave(): void {
+    this.status("Unsaved changes");
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      void this.save().catch((e: unknown) => this.error(message(e)));
+    }, 400);
+  }
+  /** Chooses the chord editor or the text editor for the open note (`type: chords` opens as chords). */
+  private applyMode(keepDraft = false): void {
+    const main = this.get("#main"),
+      banner = this.get("#chord-banner"),
+      toggle = this.get<HTMLButtonElement>("#view-mode");
+    const chordFile = !!this.current && isChordSequence(this.current.text);
+    main.classList.toggle("chord-file", chordFile);
+    banner.hidden = true;
+    let chords = false;
+    if (chordFile && !this.textView) {
+      const parsed = parseChordBody(this.editor.state.doc.toString());
+      if (parsed.sequence) {
+        this.chordEditor?.load(parsed.sequence, !keepDraft);
+        chords = true;
+      } else {
+        banner.textContent = `This chord sequence could not be read (line ${parsed.error.line}: ${parsed.error.message}), so it is shown as text. Fix it, then choose View chords.`;
+        banner.hidden = false;
+      }
+    }
+    if (!chords) this.chordEditor?.discard();
+    main.classList.toggle("chord-mode", chords);
+    toggle.replaceChildren();
+    toggle.append(
+      icon(chords ? "code" : "chords"),
+      element("span", chords ? "View as text" : "View chords"),
+    );
+  }
+  private async toggleView(): Promise<void> {
+    if (!this.current || this.busy) return;
+    const chords = this.get("#main").classList.contains("chord-mode");
+    if (chords && !(await this.leaveChords())) return;
+    this.textView = chords;
+    this.applyMode();
+  }
+  /** Mirrors chord-editor changes into the note text and autosaves it. */
+  private chordsChanged(sequence: ChordSequence): void {
+    if (!this.current) return;
+    const body = serializeChordBody(
+      sequence,
+      chordLineEnding(this.current.text),
+    );
+    this.loading = true;
+    this.editor.dispatch({
+      changes: { from: 0, to: this.editor.state.doc.length, insert: body },
+    });
+    this.loading = false;
+    this.dirty = true;
+    this.renderPreview(body);
+    this.scheduleSave();
+  }
+  /** Asks before discarding an unsaved chord draft; true when it is fine to leave. */
+  private async leaveChords(): Promise<boolean> {
+    if (!this.chordEditor?.dirty) return true;
+    const ok = await confirmDialog({
+      title: "Discard unsaved chord?",
+      text: "The chord you are editing has not been added to the sequence yet.",
+      confirm: "Discard",
+      danger: true,
+    });
+    if (ok) this.chordEditor.discard();
+    return ok;
   }
   private renderPreview(body: string): void {
     const ids = new Set(this.refs.map((r) => r.id));
@@ -732,6 +830,7 @@ export class NotesUI {
     }
   }
   private async openRoot(): Promise<void> {
+    if (!(await this.leaveChords())) return;
     this.selected = "";
     this.current = undefined;
     this.showEditor("");
@@ -740,12 +839,15 @@ export class NotesUI {
     this.chrome();
   }
   private async open(path: string): Promise<void> {
+    const same = path === this.current?.path;
+    if (!same && !(await this.leaveChords())) return;
     if ((await this.store.assignIds([path])).length) await this.refresh();
     const note = await this.store.note(path);
     this.selected = note ? path : "";
     this.current = note?.folder ? undefined : note;
     this.dirty = false;
-    this.showEditor(this.current?.text ?? "");
+    if (!same) this.textView = false;
+    this.showEditor(this.current?.text ?? "", same);
     this.setEditable(!!this.current && !this.busy);
     await this.store.put("active-note", this.current?.path ?? "");
     this.root.classList.remove("sidebar-open");
@@ -754,12 +856,13 @@ export class NotesUI {
   private targetFolder(): string {
     return this.current ? parent(this.selected) : this.selected;
   }
-  private async create(folder: boolean): Promise<void> {
+  private async create(folder: boolean, chords = false): Promise<void> {
+    if (!(await this.leaveChords())) return;
     const where = this.targetFolder();
     const name = await ask({
-      title: folder ? "New folder" : "New note",
-      label: folder ? "Folder name" : "Note name",
-      value: folder ? "" : "Untitled.md",
+      title: folder ? "New folder" : chords ? "New chord sequence" : "New note",
+      label: folder ? "Folder name" : chords ? "Sequence name" : "Note name",
+      value: folder ? "" : chords ? "Chords.md" : "Untitled.md",
       confirm: "Create",
       hint: `In /${where}`,
       validate: (value) =>
@@ -768,12 +871,17 @@ export class NotesUI {
     if (name === null) return;
     const filename = !folder && !isNote(name) ? `${name}.md` : name;
     const path = join(where, filename);
-    await this.store.create(path, folder);
+    await this.store.create(
+      path,
+      folder,
+      chords ? newChordSequenceText() : undefined,
+    );
     await this.refresh();
     await this.open(path);
   }
   private async move(): Promise<void> {
     if (!this.selected) throw new Error("Select a note or folder first.");
+    if (!(await this.leaveChords())) return;
     const to = await ask({
       title: "Rename or move",
       label: "New path",
@@ -795,6 +903,7 @@ export class NotesUI {
       danger: true,
     });
     if (!ok) return;
+    this.chordEditor?.discard();
     await this.store.delete(this.selected);
     await this.openRoot();
     await this.refresh();
@@ -837,7 +946,14 @@ export class NotesUI {
         () => {
           void this.run(() => this.open(note.path));
         },
-        { icon: note.folder ? "folder" : "file", className: "tree-item" },
+        {
+          icon: note.folder
+            ? "folder"
+            : isChordSequence(note.text)
+              ? "chords"
+              : "file",
+          className: "tree-item",
+        },
       );
       item.dataset.path = note.path;
       item.title = note.path;

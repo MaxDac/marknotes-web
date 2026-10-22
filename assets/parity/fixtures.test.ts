@@ -16,6 +16,13 @@ import {
 } from "../js/attachments";
 import { mentionAt } from "../js/editor";
 import {
+  chordDisplayNames,
+  isChordSequence,
+  parseChordBody,
+  serializeChordBody,
+  validateChordSequence,
+} from "../js/chords";
+import {
   filterRefs,
   idsToAssign,
   linkedId,
@@ -139,6 +146,17 @@ const mappings: Record<string, Mapping> = {
     skip: "the web app has no three-way merge; sync is newest-wins with a conflicted copy",
   },
   "merge/conflict-copy-name": ({ path }) => ({ path: copyName(path, 1) }),
+  "chords/detect": ({ text }) => ({ chords: isChordSequence(text) }),
+  "chords/parse": ({ body }) => parseChordBody(body),
+  "chords/serialize": ({ sequence, lineEnding }) => ({
+    body: serializeChordBody(sequence, lineEnding),
+  }),
+  "chords/validate": ({ sequence }) => ({
+    errors: validateChordSequence(sequence),
+  }),
+  "chords/display-names": ({ chords }) => ({
+    displayNames: chordDisplayNames(chords),
+  }),
 };
 
 /**
