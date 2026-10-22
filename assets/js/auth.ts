@@ -274,6 +274,7 @@ export class Auth {
       if (error instanceof InteractionRequiredAuthError)
         throw new Error(
           "Reconnect OneDrive: Microsoft requires interactive sign-in.",
+          { cause: error },
         );
       throw error;
     }
