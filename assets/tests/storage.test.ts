@@ -32,6 +32,12 @@ describe("browser note tree", () => {
     expect((await store.note("n.md"))?.text).toBe("two");
     await expect(store.create("n.md", false)).rejects.toThrow("already exists");
   });
+  it("creates notes with initial text", async () => {
+    await store.create("song.md", false, "---\nid: abc\ntype: chords\n---\n");
+    expect((await store.note("song.md"))?.text).toBe(
+      "---\nid: abc\ntype: chords\n---\n",
+    );
+  });
   it("deletes an entire subtree but keeps unrelated notes", async () => {
     await store.write("a/n.md", "n");
     await store.write("b.md", "b");

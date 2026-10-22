@@ -60,6 +60,8 @@ Browser modules (`assets/js/`):
 - `notemeta.ts` — note ids in YAML front-matter, `marknotes:` links, `@` mention refs.
 - `attachments.ts` — `attachments/<sha256>.<ext>` images: hashing, downscaling, references, cleanup.
 - `editor.ts` — CodeMirror 6 editor and markdown-it preview (sanitised with DOMPurify).
+- `chords.ts` — chord sequences (`type: chords` notes): detect, parse, canonical serialise, validate, display names.
+- `chord-editor.ts` — graphical chord-sequence editor (chord list, fretboard builder), shown instead of `editor.ts`.
 - `ui.ts`, `components.ts`, `app.ts` — UI and LiveView hook wiring.
 
 Tests: ExUnit in `test/` (server only); vitest in `assets/tests/` (unit, sync against `fake-drive.ts`); spec fixtures in

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Store, type Account } from "../js/storage";
 import { SyncEngine, localTime, syncAll } from "../js/sync";
+import { isChordSequence, parseChordBody } from "../js/chords";
+import { noteBody } from "../js/notemeta";
 import { FakeDrive } from "./fake-drive";
 let store: Store, remote: FakeDrive, engine: SyncEngine;
 const account: Account = {
@@ -143,6 +145,24 @@ describe("sync decision matrix", () => {
     await store.write("n.md", "---\nid: orig1234\n---\nmine", undefined, 3000);
     await remote.edit("n.md", "---\nid: orig1234\n---\nnewest", 4000);
     expect((await engine.run()).copies).toEqual([]);
+  });
+  it("syncs chord sequences as ordinary notes and keeps their type on conflicted copies", async () => {
+    const head = "---\nid: chord123\ntype: chords\n---\n";
+    const mine = `${head}## C (guitar)\nfrets: x 3/3 2/2 0 1/1 0\n`;
+    const theirs = `${head}## G (guitar)\nfrets: 3/2 2/1 0 0 0 3/3\n`;
+    await store.write("song.md", mine, undefined, 1000);
+    await engine.run();
+    expect(remote.data.get("song.md")?.text).toBe(mine);
+    await store.write("song.md", `${mine}\n`, undefined, 2000);
+    await remote.edit("song.md", theirs, 3000);
+    expect((await engine.run()).copies).toEqual(["song (conflicted copy).md"]);
+    expect((await store.note("song.md"))?.text).toBe(theirs);
+    const copy = (await store.note("song (conflicted copy).md"))!.text;
+    expect(isChordSequence(copy)).toBe(true);
+    expect(copy).not.toContain("chord123");
+    expect(parseChordBody(noteBody(copy)).sequence?.chords[0]?.baseName).toBe(
+      "C",
+    );
   });
   it("does not duplicate an identical conflicted copy", async () => {
     await store.write("n.md", "mine", undefined, 1000);
