@@ -81,6 +81,9 @@ no server-side recovery. Private browsing may limit storage. WebCrypto, IndexedD
 
 ## Development
 
+Coding agents (and humans) should start with [AGENTS.md](AGENTS.md): CI-mirroring commands, architecture and the
+cross-app parity rules shared with the Android and desktop apps.
+
 Requirements: [Mise](https://mise.jdx.dev/) (or asdf) and the Erlang, Elixir and Node.js versions in
 `.tool-versions`. Mise reads that file; `mise.toml` adds project tasks without duplicating the version pins.
 No database, Docker or cloud credentials are needed to run the local editor.
@@ -107,7 +110,7 @@ mise run dev                   # rebuild and serve http://localhost:4000; Ctrl+C
 ```
 
 `mise run build` rebuilds without starting the server. `mise run check` runs formatting, Credo, ExUnit,
-Dialyzer and the asset checks. `mise run e2e` builds and runs Playwright; install Chromium first as described below
+Dialyzer and the asset checks; `mise run audit` runs the dependency audits and Sobelow. `mise run e2e` builds and runs Playwright; install Chromium first as described below
 and stop the development server because Playwright starts its own server on port 4000.
 The development server binds only to `127.0.0.1`. `curl --fail http://localhost:4000/health` checks readiness.
 Assets are built before launch, not watched; after editing client assets, rebuild and refresh the browser.
@@ -157,8 +160,10 @@ changing a master SVG, regenerate them with `cd branding && npm install --no-pac
 
 ## CI/CD
 
-- `checks.yml` (reusable) has five required checks: "Elixir (compile, format, credo, test)", "Dialyzer",
-  "Assets (prettier, tsc, eslint, vitest)", "Browser E2E (Playwright)" and "Docker image build".
+- `checks.yml` (reusable) has six checks: "Elixir (compile, format, credo, test)", "Dependencies (audit)" (`mix hex.audit`
+  for retired packages, `mix deps.audit` via mix_audit, the Sobelow security scan configured by `.sobelow-conf`, and
+  `npm audit --audit-level=high`), "Dialyzer", "Assets (prettier, tsc, eslint, vitest)", "Browser E2E (Playwright)" and
+  "Docker image build".
 - `pr-ci.yml` runs them on pull requests, plus "Dependency review" (fails on high-severity vulnerable dependencies) and
   "actionlint" (workflow lint, including shellcheck of `run:` scripts).
 - `codeql.yml` runs CodeQL for `javascript-typescript` and `actions` on pull requests, pushes to `main` and weekly
@@ -166,8 +171,9 @@ changing a master SVG, regenerate them with `cd branding && npm install --no-pac
 - `dependabot-automerge.yml` enables squash auto-merge for Dependabot semver patch/minor updates; majors stay manual.
   Requires "Allow auto-merge" in the repository settings; merges still wait for the required checks.
 - `fly.yml` runs the checks on every push to `main` and deploys to Fly.io if they pass.
-- `release.yml` is started manually with a `version` (`X.Y.Z`) and a `prerelease` flag. It runs the checks, publishes the
-  `vX.Y.Z` GitHub Release and deploys that commit to Fly.
+- `release.yml` is started manually on `main` (other refs are rejected) with a `version` (`X.Y.Z`) and a `prerelease`
+  flag. It runs the checks, publishes the `vX.Y.Z` GitHub Release (no binary assets; the deployment is the product),
+  deploys that commit to Fly and writes a release summary (version, pre-release, tag, commit, deployed URL and version).
 - `deploy.yml` (reusable) is the single deploy job used by both. It fails early with a clear error if `FLY_API_TOKEN` is
   missing, runs `flyctl deploy --remote-only --ha=false`, then smoke-tests `/health` and `/` with retries, asserting that
   `/health` reports the deployed commit (`revision`) and, for releases, the release `version`. A job summary records the

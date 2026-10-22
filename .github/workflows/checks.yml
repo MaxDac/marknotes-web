@@ -1,7 +1,7 @@
 name: Checks
 
 # Reusable checks shared by PR CI, Fly Deploy and Release.
-# Contract: mix (compile, format, credo, test, dialyzer, assets.deploy) and assets/package.json
+# Contract: mix (compile, format, credo, test, dialyzer, hex.audit, deps.audit, sobelow, assets.deploy) and assets/package.json
 # scripts `check` (prettier + tsc + eslint + vitest) and `e2e` (Playwright, starts the server itself).
 on:
   workflow_call:
@@ -41,6 +41,49 @@ jobs:
       - run: mix format --check-formatted
       - run: mix credo --strict
       - run: mix test --warnings-as-errors
+
+  audit:
+    name: Dependencies (audit)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          version-file: .tool-versions
+          version-type: strict
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+          cache: npm
+          cache-dependency-path: assets/package-lock.json
+
+      - name: Restore deps and build cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+          key: mix-test-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            mix-test-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
+
+      - run: mix deps.get
+      - name: Retired Hex packages
+        run: mix hex.audit
+      - name: Known vulnerabilities (mix_audit)
+        run: mix deps.audit
+      # Fails on any finding; false positives are documented in .sobelow-conf / `# sobelow_skip` comments.
+      - name: Security scan (Sobelow)
+        run: mix sobelow --config
+      - name: npm audit (high and above)
+        run: npm audit --audit-level=high
+        working-directory: assets
 
   dialyzer:
     name: Dialyzer

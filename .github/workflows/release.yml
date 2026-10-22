@@ -1,6 +1,7 @@
 name: Release
 
-# Manual release: runs the checks, tags vX.Y.Z, publishes a GitHub Release and deploys that commit to Fly.
+# Manual release (main only): runs the checks, tags vX.Y.Z, publishes a GitHub Release (no binary assets;
+# the web app ships as the Fly deployment), deploys that commit to Fly and writes a release summary.
 on:
   workflow_dispatch:
     inputs:
@@ -38,6 +39,10 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
         run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Releases must be dispatched from main (got $GITHUB_REF)."
+            exit 1
+          fi
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Version '$VERSION' is not a valid X.Y.Z semver."
             exit 1
@@ -86,3 +91,35 @@ jobs:
       app-version: ${{ needs.validate.outputs.version }}
     secrets:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  summary:
+    name: Release summary
+    needs: [validate, release, deploy]
+    if: always() && needs.validate.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Job summary
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          DEPLOY_URL: ${{ needs.deploy.outputs.url }}
+          DEPLOYED_VERSION: ${{ needs.deploy.outputs.version }}
+        run: |
+          release_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/v$VERSION"
+          {
+            echo "### MarkNotes Web $VERSION"
+            echo ""
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Version | \`$VERSION\` |"
+            echo "| Pre-release | $PRERELEASE |"
+            echo "| Tag | [\`v$VERSION\`]($release_url) |"
+            echo "| Commit | \`$GITHUB_SHA\` |"
+            echo "| GitHub Release | $RELEASE_RESULT |"
+            echo "| Deployed URL | ${DEPLOY_URL:-not deployed} |"
+            echo "| Deployed version | \`${DEPLOYED_VERSION:-n/a}\` |"
+            echo "| Deploy | $DEPLOY_RESULT |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -32,6 +32,17 @@ run = [
   "npm --prefix assets run check",
 ]
 
+[tasks.audit]
+description = "Audit dependencies (retired Hex packages, mix_audit, npm audit) and run Sobelow"
+dir = "{{config_root}}"
+env = { MIX_ENV = "test" }
+run = [
+  "mix hex.audit",
+  "mix deps.audit",
+  "mix sobelow --config",
+  "npm --prefix assets audit --audit-level=high",
+]
+
 [tasks.e2e]
 description = "Build and run Playwright tests with their own local server"
 dir = "{{config_root}}"
