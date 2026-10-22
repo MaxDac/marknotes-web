@@ -43,7 +43,7 @@ export interface Remote {
   readManifest(): Promise<string | null>;
   writeManifest(text: string): Promise<void>;
 }
-interface Manifest {
+export interface Manifest {
   format: number;
   app: string;
   deviceId: string;
@@ -61,7 +61,8 @@ export async function hash(text: string): Promise<string> {
     b.toString(16).padStart(2, "0"),
   ).join("");
 }
-function manifest(text: string | null): Manifest | null {
+/** Parses .marknotes/manifest.json; throws when it is unreadable or not format 1. */
+export function parseManifest(text: string | null): Manifest | null {
   if (text === null) return null;
   const m: unknown = JSON.parse(text);
   if (
@@ -94,6 +95,26 @@ function manifest(text: string | null): Manifest | null {
     );
   return m as Manifest;
 }
+/** Compact manifest JSON: keys format, app, deviceId, updatedAt, files; file paths sorted. */
+export function serializeManifest(
+  manifest: Pick<Manifest, "deviceId" | "updatedAt" | "files">,
+): string {
+  const files = Object.fromEntries(
+    Object.entries(manifest.files)
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([path, f]) => [
+        path,
+        { sha256: f.sha256, version: f.version, syncedAt: f.syncedAt },
+      ]),
+  );
+  return JSON.stringify({
+    format: 1,
+    app: "MarkNotes",
+    deviceId: manifest.deviceId,
+    updatedAt: manifest.updatedAt,
+    files,
+  });
+}
 export interface Outcome {
   changes: number;
   /** Conflicted copies created for versions that lost newest-wins reconciliation. */
@@ -106,7 +127,9 @@ export function localTime(note: Note, record?: RecordState): number {
 }
 const changed = (r: Entry, record: RecordState) =>
   r.id !== record.remoteId || r.version !== record.version;
-function copyName(path: string, n: number): string {
+/** <stem> (conflicted copy)[ n].<ext> beside path; 
+ > 1 disambiguates taken names. */
+export function copyName(path: string, n: number): string {
   const dot = path.lastIndexOf(".");
   const stem = path.slice(0, dot),
     extension = path.slice(dot);
@@ -262,7 +285,7 @@ export class SyncEngine {
     const remotePaths = new Set(remote.keys());
     let previousManifest: Manifest | null = null;
     try {
-      previousManifest = manifest(await this.remote.readManifest());
+      previousManifest = parseManifest(await this.remote.readManifest());
     } catch (error) {
       result.errors.push(`Manifest: ${message(error)}`);
     }
@@ -483,9 +506,7 @@ export class SyncEngine {
     ) {
       try {
         await this.remote.writeManifest(
-          JSON.stringify({
-            format: 1,
-            app: "MarkNotes",
+          serializeManifest({
             deviceId: await this.store.deviceId(),
             updatedAt: Date.now(),
             files,

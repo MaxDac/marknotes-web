@@ -6,7 +6,8 @@
     "build": "node build.mjs",
     "check": "prettier --check . && tsc --noEmit && eslint . && vitest run",
     "format": "prettier --write .",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "parity": "vitest run --config vitest.parity.config.ts"
   },
   "dependencies": {
     "@azure/msal-browser": "^5.0.0",

@@ -10,5 +10,5 @@
     "noEmit": true,
     "types": ["node", "vitest/globals"]
   },
-  "include": ["js", "tests", "e2e", "*.ts"]
+  "include": ["js", "tests", "parity", "e2e", "*.ts"]
 }

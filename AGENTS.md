@@ -13,6 +13,7 @@ Runtimes are pinned in `.tool-versions` (Erlang, Elixir, Node.js) and shared wit
 No database, Docker or cloud credentials are needed.
 
 ```sh
+git submodule update --init spec   # marknotes-spec (shared format + fixtures)
 mise trust && mise install
 mise run setup        # hex/rebar, deps, assets build, compile
 mise run dev          # http://localhost:4000 (assets are built, not watched; rebuild after editing assets)
@@ -29,6 +30,7 @@ On WSL, make sure the Mise/asdf shims precede Windows executables (`mise exec --
 | Elixir (compile, format, credo, test) | `mix deps.unlock --check-unused && mix compile --warnings-as-errors && mix format --check-formatted && mix credo --strict && mix test --warnings-as-errors` |
 | Dependencies (audit) | `mix hex.audit && mix deps.audit && mix sobelow --config && (cd assets && npm audit --audit-level=high)` |
 | Dialyzer | `mix dialyzer` |
+| Parity (marknotes-spec fixtures) | `git submodule update --init spec && cd assets && npm run parity` |
 | Assets (prettier, tsc, eslint, vitest) | `cd assets && npm ci && npm run check` |
 | Browser E2E (Playwright) | `cd assets && npx playwright install --with-deps chromium && npm run e2e` (starts its own server on :4000) |
 | Docker image build | `docker build .` |
@@ -60,10 +62,12 @@ Browser modules (`assets/js/`):
 - `editor.ts` — CodeMirror 6 editor and markdown-it preview (sanitised with DOMPurify).
 - `ui.ts`, `components.ts`, `app.ts` — UI and LiveView hook wiring.
 
-Tests: ExUnit in `test/` (server only); vitest in `assets/tests/` (unit, sync against `fake-drive.ts`); Playwright in
+Tests: ExUnit in `test/` (server only); vitest in `assets/tests/` (unit, sync against `fake-drive.ts`); spec fixtures in
+`assets/parity/` (`npm run parity`, separate config so `npm run check` works without the submodule); Playwright in
 `assets/e2e/` (network fixtures, no real accounts).
 
-Shared format reference: `docs/note-format.md` (moving to the `marknotes-spec` repository, see below).
+Shared format reference: `spec/note-format.md` (the `marknotes-spec` git submodule at `spec/`; `docs/note-format.md`
+only points there). `assets/parity/fixtures.test.ts` runs every `spec/fixtures` file against the real browser code.
 
 ## Conventions
 
@@ -109,7 +113,9 @@ note format and front-matter ids, `marknotes:` note links, `attachments/` naming
 2. Then implement it here **and** open/track the mirrored change in the Android and desktop repos. Do not merge a
    format-breaking change that other apps cannot read.
 3. If this app intentionally differs, record it in the fixture as `knownDivergence.web` with a reason, and in
-   `features.md`.
+   `features.md`. The parity runner asserts such cases still differ (so a fix is noticed); never edit fixtures or
+   loosen `expected` here. Failing cases not yet recorded in the spec go in the runner's `pending` map with a TODO.
+   Bump the pin with `git -C spec fetch && git -C spec checkout <sha>` (Dependabot also opens `gitsubmodule` PRs).
 4. Every PR fills in the **Parity impact** section of the PR template.
 5. To audit a feature across apps, use the parity-check prompt: `/parity-check <feature>` in Claude Code
    (`.claude/commands/parity-check.md`) or `.github/prompts/parity-check.prompt.md` in Copilot.

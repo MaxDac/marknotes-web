@@ -27,7 +27,7 @@ the automated provider tests.
   button); it inserts a `[Title](marknotes:id)` link that opens the note from the preview, even after renames or moves.
 - **Images**: insert PNG, JPEG, GIF or WebP images with the toolbar, paste or drag-and-drop. They are downscaled to at
   most 2048 px, stored in the root `attachments/` folder, synced to every drive, and can be cleaned up from **Settings**.
-  See [docs/note-format.md](docs/note-format.md) for the shared note, link and attachment format.
+  See [marknotes-spec](https://github.com/MaxDac/marknotes-spec) (`spec/` submodule) for the shared note, link and attachment format.
 - **Appearance**: a drive-style layout (sidebar folder tree, breadcrumb, toolbar, modal dialogs and menus built as custom
   accessible components, no native prompts or selects). **Settings** offers theme System, Light or Dark, and an accent
   colour from 9 palettes.
@@ -103,6 +103,7 @@ sudo pacman -S --needed base-devel ncurses openssl perl
 From the repository root:
 
 ```sh
+git submodule update --init spec   # shared format spec and fixtures (or clone with --recurse-submodules)
 mise trust
 mise install                   # install the pinned runtimes (first Erlang build can take several minutes)
 mise run setup                 # bootstrap Hex/Rebar, install locked dependencies, build assets and compile
@@ -160,10 +161,12 @@ changing a master SVG, regenerate them with `cd branding && npm install --no-pac
 
 ## CI/CD
 
-- `checks.yml` (reusable) has six checks: "Elixir (compile, format, credo, test)", "Dependencies (audit)" (`mix hex.audit`
+- `checks.yml` (reusable) has seven checks: "Elixir (compile, format, credo, test)", "Dependencies (audit)" (`mix hex.audit`
   for retired packages, `mix deps.audit` via mix_audit, the Sobelow security scan configured by `.sobelow-conf`, and
-  `npm audit --audit-level=high`), "Dialyzer", "Assets (prettier, tsc, eslint, vitest)", "Browser E2E (Playwright)" and
-  "Docker image build".
+  `npm audit --audit-level=high`), "Dialyzer", "Assets (prettier, tsc, eslint, vitest)", "Browser E2E (Playwright)",
+  "Docker image build" and "Parity (marknotes-spec fixtures)" (`npm run parity`: every golden fixture of the
+  [marknotes-spec](https://github.com/MaxDac/marknotes-spec) `spec/` submodule run against the browser code; known
+  divergences are asserted to still differ).
 - `pr-ci.yml` runs them on pull requests, plus "Dependency review" (fails on high-severity vulnerable dependencies) and
   "actionlint" (workflow lint, including shellcheck of `run:` scripts).
 - `codeql.yml` runs CodeQL for `javascript-typescript` and `actions` on pull requests, pushes to `main` and weekly
