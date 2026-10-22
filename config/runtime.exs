@@ -1,8 +1,9 @@
 import Config
 
 config :marknotes, :providers,
-  dropbox: System.get_env("DROPBOX_APP_KEY", "") |> String.trim(),
-  onedrive: System.get_env("MSAL_CLIENT_ID", "") |> String.trim()
+  dropbox: System.get_env("DROPBOX_APP_KEY", "sdjefhss3elcfp3") |> String.trim(),
+  onedrive:
+    System.get_env("MSAL_CLIENT_ID", "b923171e-d03d-4e85-9c01-4909c902a82c") |> String.trim()
 
 # Commit SHA baked into the release image (Dockerfile GIT_SHA); reported by /health.
 config :marknotes, :revision, System.get_env("GIT_SHA", "unknown") |> String.trim()
