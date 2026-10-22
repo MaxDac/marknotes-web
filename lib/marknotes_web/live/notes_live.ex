@@ -17,8 +17,7 @@ defmodule MarknotesWeb.NotesLive do
       data-dropbox={@providers[:dropbox] || ""}
       data-onedrive={@providers[:onedrive] || ""}
     >
-      <h1>MarkNotes</h1>
-      <p>Loading your browser's notes...</p>
+      <p class="loading">Loading your browser's notes...</p>
       <noscript>JavaScript and IndexedDB are required. Your notes stay in this browser.</noscript>
     </main>
     """

@@ -16,6 +16,17 @@ interface DropboxItem {
   path_display?: string;
   path_lower: string;
   rev?: string;
+  client_modified?: string;
+  server_modified?: string;
+}
+/** Parses an ISO timestamp, ignoring absent or malformed values. */
+function time(value?: string): number | undefined {
+  const ms = value ? Date.parse(value) : NaN;
+  return Number.isFinite(ms) ? ms : undefined;
+}
+/** Dropbox requires second-precision UTC timestamps. */
+function dropboxTime(ms: number): string {
+  return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 interface DropboxPage {
   entries: DropboxItem[];
@@ -94,6 +105,7 @@ export class Dropbox implements Drive {
       id: item.id,
       folder: item[".tag"] === "folder",
       version: item.rev ?? "",
+      modifiedAt: time(item.client_modified ?? item.server_modified),
     };
   }
   private remember(item: DropboxItem): Entry {
@@ -163,6 +175,7 @@ export class Dropbox implements Drive {
     path: string,
     text: string,
     mode: unknown,
+    modifiedAt?: number,
   ): Promise<DropboxItem> {
     const r = await this.auth.authorized(
       this.account,
@@ -177,6 +190,9 @@ export class Dropbox implements Drive {
             autorename: false,
             mute: true,
             strict_conflict: true,
+            ...(modifiedAt === undefined
+              ? {}
+              : { client_modified: dropboxTime(modifiedAt) }),
           }),
         },
         body: new TextEncoder().encode(text),
@@ -185,13 +201,19 @@ export class Dropbox implements Drive {
     if (!r.ok) throw new ApiError(r.status, "Dropbox");
     return r.json() as Promise<DropboxItem>;
   }
-  async upload(path: string, text: string, previous?: Entry): Promise<Entry> {
+  async upload(
+    path: string,
+    text: string,
+    previous?: Entry,
+    modifiedAt?: number,
+  ): Promise<Entry> {
     await ensureParents(this, path);
     return this.remember(
       await this.put(
         path,
         text,
         previous ? { ".tag": "update", update: previous.version } : "add",
+        modifiedAt,
       ),
     );
   }
@@ -255,12 +277,19 @@ interface GraphItem {
   parentReference?: { id?: string };
   cTag?: string;
   eTag?: string;
+  lastModifiedDateTime?: string;
+  fileSystemInfo?: { lastModifiedDateTime?: string };
   "@microsoft.graph.downloadUrl"?: string;
 }
 interface GraphPage {
   value: GraphItem[];
   "@odata.nextLink"?: string;
   "@odata.deltaLink"?: string;
+}
+function graphTime(node: GraphItem): number | undefined {
+  return time(
+    node.fileSystemInfo?.lastModifiedDateTime ?? node.lastModifiedDateTime,
+  );
 }
 export class OneDrive implements Drive {
   private rootId?: string;
@@ -347,6 +376,7 @@ export class OneDrive implements Drive {
           folder: !!node.folder,
           version: node.folder ? "" : (node.cTag ?? node.eTag ?? ""),
           tag: node.eTag,
+          modifiedAt: graphTime(node),
         });
       }
       if (deferred.length === pending.length) break;
@@ -402,9 +432,15 @@ export class OneDrive implements Drive {
       folder: !!node.folder,
       version: node.folder ? "" : (node.cTag ?? node.eTag ?? ""),
       tag: node.eTag,
+      modifiedAt: graphTime(node),
     };
   }
-  async upload(path: string, text: string, previous?: Entry): Promise<Entry> {
+  async upload(
+    path: string,
+    text: string,
+    previous?: Entry,
+    modifiedAt?: number,
+  ): Promise<Entry> {
     await ensureParents(this, path);
     const root = await this.root();
     const encoded = path.split("/").map(encodeURIComponent).join("/");
@@ -415,7 +451,7 @@ export class OneDrive implements Drive {
     const url = previous
       ? `/me/drive/items/${encodeURIComponent(previous.id)}/content`
       : `/me/drive/items/${encodeURIComponent(root)}:/${encoded}:/content?@microsoft.graph.conflictBehavior=fail`;
-    const item = await this.api<GraphItem>(url, {
+    let item = await this.api<GraphItem>(url, {
       method: "PUT",
       headers: {
         "Content-Type": "application/octet-stream",
@@ -423,6 +459,20 @@ export class OneDrive implements Drive {
       },
       body: new TextEncoder().encode(text),
     });
+    if (modifiedAt !== undefined)
+      // Preserve the edit time so other devices can tell which version is newest.
+      item = await this.api<GraphItem>(
+        `/me/drive/items/${encodeURIComponent(item.id)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileSystemInfo: {
+              lastModifiedDateTime: new Date(modifiedAt).toISOString(),
+            },
+          }),
+        },
+      );
     return this.itemEntry(item, path);
   }
   async mkdir(path: string): Promise<Entry> {

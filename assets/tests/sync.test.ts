@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Store, type Account } from "../js/storage";
-import { SyncEngine, syncAll } from "../js/sync";
+import { SyncEngine, localTime, syncAll } from "../js/sync";
 import { FakeDrive } from "./fake-drive";
 let store: Store, remote: FakeDrive, engine: SyncEngine;
 const account: Account = {
@@ -88,41 +88,73 @@ describe("sync decision matrix", () => {
     await engine.run();
     expect(remote.data.size).toBe(0);
   });
-  it("merges disjoint edits and retains overlapping conflicts until resolved", async () => {
-    await store.write("n.md", "a\nb\nc\n");
+  it("keeps the newer drive edit and saves the older local one as a copy", async () => {
+    await store.write("n.md", "one", undefined, 1000);
     await engine.run();
-    await store.write("n.md", "A\nb\nc\n");
-    await remote.edit("n.md", "a\nb\nC\n");
-    expect((await engine.run()).conflicts).toHaveLength(0);
-    expect((await store.note("n.md"))?.text).toBe("A\nb\nC\n");
-    await store.write("n.md", "mine");
-    await remote.edit("n.md", "theirs");
-    const conflict = (await engine.run()).conflicts[0];
-    expect(conflict).toBeDefined();
-    expect((await engine.run()).conflicts).toHaveLength(1);
-    await engine.resolve(conflict, "resolved");
-    expect((await store.note("n.md"))?.text).toBe("resolved");
-    expect(remote.data.get("n.md")?.text).toBe("resolved");
-  });
-  it("reports different initial versions rather than overwriting", async () => {
-    await store.write("n.md", "mine");
-    await remote.edit("n.md", "theirs");
+    await store.write("n.md", "mine", undefined, 2000);
+    await remote.edit("n.md", "theirs", 3000);
     const result = await engine.run();
-    expect(result.conflicts).toHaveLength(1);
-    expect(result.conflicts[0].base).toBeNull();
-  });
-  it("rejects stale resolution and supports unique conflicted siblings", async () => {
-    await store.write("n.md", "mine");
-    await remote.edit("n.md", "theirs");
-    const conflict = (await engine.run()).conflicts[0];
-    await store.write("n.md", "new edit");
-    await expect(engine.resolve(conflict, "old")).rejects.toThrow(
-      "changed since",
+    expect(result.errors).toEqual([]);
+    expect(result.copies).toEqual(["n (conflicted copy).md"]);
+    const local = await store.note("n.md");
+    expect(local?.text).toBe("theirs");
+    expect(local?.modifiedAt).toBe(3000);
+    expect(remote.data.get("n.md")?.text).toBe("theirs");
+    expect((await store.note("n (conflicted copy).md"))?.text).toBe("mine");
+    expect(remote.data.get("n (conflicted copy).md")?.text).toBe("mine");
+    expect(remote.data.get("n (conflicted copy).md")?.entry.modifiedAt).toBe(
+      2000,
     );
-    const current = (await engine.run()).conflicts[0];
-    await engine.resolve(current, current.mine, true);
+    expect((await engine.run()).copies).toEqual([]);
+  });
+  it("keeps the newer local edit and overwrites the drive", async () => {
+    await store.write("n.md", "one", undefined, 1000);
+    await engine.run();
+    await remote.edit("n.md", "theirs", 2000);
+    await store.write("n.md", "mine", undefined, 3000);
+    expect((await engine.run()).copies).toEqual(["n (conflicted copy).md"]);
+    expect(remote.data.get("n.md")?.text).toBe("mine");
+    expect(remote.data.get("n.md")?.entry.modifiedAt).toBe(3000);
+    expect((await store.note("n.md"))?.text).toBe("mine");
     expect((await store.note("n (conflicted copy).md"))?.text).toBe("theirs");
-    expect(remote.data.get("n.md")?.text).toBe("new edit");
+  });
+  it("reconciles differing initial versions by modification time", async () => {
+    await store.write("n.md", "mine", undefined, 1000);
+    await remote.edit("n.md", "theirs", 2000);
+    expect((await engine.run()).copies).toHaveLength(1);
+    expect((await store.note("n.md"))?.text).toBe("theirs");
+    expect((await store.note("n (conflicted copy).md"))?.text).toBe("mine");
+  });
+  it("prefers the local version when modification times are equal", async () => {
+    await store.write("n.md", "mine", undefined, 2000);
+    await remote.edit("n.md", "theirs", 2000);
+    await engine.run();
+    expect(remote.data.get("n.md")?.text).toBe("mine");
+    expect((await store.note("n (conflicted copy).md"))?.text).toBe("theirs");
+  });
+  it("does not duplicate an identical conflicted copy", async () => {
+    await store.write("n.md", "mine", undefined, 1000);
+    await remote.edit("n.md", "theirs", 2000);
+    await engine.run();
+    await store.write("n.md", "mine", undefined, 3000);
+    await remote.edit("n.md", "newest", 4000);
+    expect((await engine.run()).copies).toEqual([]);
+    expect(await store.note("n (conflicted copy) 2.md")).toBeUndefined();
+    expect((await store.note("n.md"))?.text).toBe("newest");
+  });
+  it("keeps remote edit times for downloaded notes", async () => {
+    await remote.edit("n.md", "remote", 1234);
+    await engine.run();
+    expect((await store.note("n.md"))?.modifiedAt).toBe(1234);
+  });
+  it("falls back to the last sync time for notes saved before timestamps", async () => {
+    await store.write("n.md", "one", undefined, 1000);
+    await engine.run();
+    const note = (await store.note("n.md"))!;
+    // Simulate a note stored by a version without modifiedAt.
+    const legacy = { ...note, text: "legacy edit", modifiedAt: undefined };
+    expect(localTime(legacy, { syncedAt: 42 } as never)).toBe(42);
+    expect(localTime(legacy)).toBe(0);
   });
   it("never interprets a failed snapshot as remote deletion", async () => {
     await store.write("n.md", "keep");
@@ -132,15 +164,13 @@ describe("sync decision matrix", () => {
     expect((await store.note("n.md"))?.text).toBe("keep");
   });
   it("matches Android's conflict sibling counter and extension casing", async () => {
-    await store.write("n.MD", "mine");
-    await store.write("n (conflicted copy).MD", "existing");
-    await remote.edit("n.MD", "theirs");
-    const conflict = (await engine.run()).conflicts.find(
-      (c) => c.path === "n.MD",
-    )!;
-    await engine.resolve(conflict, conflict.mine, true);
-    expect((await store.note("n (conflicted copy) 2.MD"))?.text).toBe("theirs");
+    await store.write("n.MD", "mine", undefined, 1000);
+    await store.write("n (conflicted copy).MD", "existing", undefined, 1000);
+    await remote.edit("n.MD", "theirs", 2000);
+    await engine.run();
+    expect((await store.note("n (conflicted copy) 2.MD"))?.text).toBe("mine");
     expect((await store.note("n (conflicted copy).MD"))?.text).toBe("existing");
+    expect((await store.note("n.MD"))?.text).toBe("theirs");
   });
   it("reports corrupt manifests but still syncs from content", async () => {
     remote.manifest = "{bad";
@@ -165,4 +195,34 @@ describe("sync decision matrix", () => {
     expect([...result.values()].flatMap((r) => r.errors)).toEqual([]);
     expect(remote.data.get("new.md")?.text).toBe("second");
   });
+  for (const [first, second] of [
+    [2000, 3000],
+    [3000, 2000],
+  ])
+    it(`propagates the newest of local and two drives (${first} vs ${second})`, async () => {
+      const other = new FakeDrive(),
+        targets = [
+          { account, remote },
+          { account: { ...account, id: "b" }, remote: other },
+        ];
+      await store.write("n.md", "base", undefined, 1000);
+      await syncAll(store, targets);
+      await remote.edit("n.md", "from first", first);
+      await other.edit("n.md", "from second", second);
+      const results = await syncAll(store, targets);
+      expect([...results.values()].flatMap((r) => r.errors)).toEqual([]);
+      const [winner, loser] =
+        first > second
+          ? ["from first", "from second"]
+          : ["from second", "from first"];
+      for (const drive of [remote, other]) {
+        expect(drive.data.get("n.md")?.text).toBe(winner);
+        expect(drive.data.get("n (conflicted copy).md")?.text).toBe(loser);
+      }
+      expect((await store.note("n.md"))?.text).toBe(winner);
+      expect((await store.note("n.md"))?.modifiedAt).toBe(
+        Math.max(first, second),
+      );
+      expect((await store.note("n (conflicted copy).md"))?.text).toBe(loser);
+    });
 });

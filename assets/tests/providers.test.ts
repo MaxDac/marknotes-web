@@ -42,6 +42,8 @@ describe("Dropbox store", () => {
       path_lower: "/marknotes/note.md",
       id: "id:file",
       rev: "r1",
+      client_modified: "2024-01-02T03:04:05Z",
+      server_modified: "2024-01-03T00:00:00Z",
     };
     mock((url, init) => {
       if (url.endsWith("create_folder_v2"))
@@ -63,6 +65,7 @@ describe("Dropbox store", () => {
         );
         expect(arg.mode).toEqual({ ".tag": "update", update: "r1" });
         expect(arg.autorename).toBe(false);
+        expect(arg.client_modified).toBe("2023-11-14T22:13:20Z");
         return json({ ...item, rev: "r2" });
       }
       throw new Error(`Unexpected ${url}`);
@@ -70,9 +73,11 @@ describe("Dropbox store", () => {
     const remote = new Dropbox(auth, dbAccount);
     const entries = await remote.snapshot();
     expect(entries[0].path).toBe("Note.md");
-    expect((await remote.upload("Note.md", "new", entries[0])).version).toBe(
-      "r2",
-    );
+    expect(entries[0].modifiedAt).toBe(Date.parse("2024-01-02T03:04:05Z"));
+    expect(
+      (await remote.upload("Note.md", "new", entries[0], 1700000000123))
+        .version,
+    ).toBe("r2");
     await remote.snapshot();
     expect(
       calls.filter((c) => c.url.endsWith("list_folder/continue")).at(-1)?.init
@@ -119,6 +124,8 @@ describe("OneDrive store", () => {
               name: "N.md",
               cTag: "c1",
               eTag: "e1",
+              lastModifiedDateTime: "2024-01-03T00:00:00Z",
+              fileSystemInfo: { lastModifiedDateTime: "2024-01-02T03:04:05Z" },
               parentReference: { id: "folder" },
             },
             {
@@ -140,6 +147,19 @@ describe("OneDrive store", () => {
           parentReference: { id: "folder" },
         });
       }
+      if (url.endsWith("/me/drive/items/note") && init.method === "PATCH") {
+        expect(JSON.parse(String(init.body))).toEqual({
+          fileSystemInfo: { lastModifiedDateTime: "2023-11-14T22:13:20.123Z" },
+        });
+        return json({
+          id: "note",
+          name: "N.md",
+          cTag: "c2",
+          eTag: "e3",
+          fileSystemInfo: { lastModifiedDateTime: "2023-11-14T22:13:20.123Z" },
+          parentReference: { id: "folder" },
+        });
+      }
       throw new Error(`Unexpected ${url}`);
     });
     const remote = new OneDrive(auth, msAccount);
@@ -147,7 +167,16 @@ describe("OneDrive store", () => {
       entry = entries.find((e) => e.path === "Folder/N.md")!;
     expect(entry.version).toBe("c1");
     expect(entry.tag).toBe("e1");
-    expect((await remote.upload(entry.path, "new", entry)).version).toBe("c2");
+    expect(entry.modifiedAt).toBe(Date.parse("2024-01-02T03:04:05Z"));
+    const updated = await remote.upload(
+      entry.path,
+      "new",
+      entry,
+      1700000000123,
+    );
+    expect(updated.version).toBe("c2");
+    expect(updated.tag).toBe("e3");
+    expect(updated.modifiedAt).toBe(1700000000123);
     await remote.snapshot();
     expect(calls.at(-1)?.url).toContain("/checkpoint");
   });

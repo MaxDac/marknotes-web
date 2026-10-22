@@ -1,12 +1,20 @@
 import { test, expect, type Page } from "@playwright/test";
-async function create(page: Page, button: string, name: string): Promise<void> {
-  const handled = page
-    .waitForEvent("dialog")
-    .then((dialog) => dialog.accept(name));
-  await page.getByRole("button", { name: button, exact: true }).click();
-  await handled;
-  await expect(page.locator("#title")).toContainText(name);
+async function submit(page: Page, value: string): Promise<void> {
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("textbox").fill(value);
+  await dialog.getByRole("button", { name: /^(Create|Save)$/ }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.locator("#title")).toContainText(value);
   await expect(page.locator("#workspace")).toBeEnabled();
+}
+async function create(
+  page: Page,
+  kind: "New note" | "New folder",
+  name: string,
+): Promise<void> {
+  await page.getByRole("button", { name: "New", exact: true }).click();
+  await page.getByRole("menuitem", { name: kind }).click();
+  await submit(page, name);
 }
 test("local CRUD, editor, privacy, settings and reload", async ({ page }) => {
   const requests: string[] = [],
@@ -32,20 +40,27 @@ test("local CRUD, editor, privacy, settings and reload", async ({ page }) => {
   await expect(page.getByRole("article")).toContainText(
     "PRIVATE_SENTINEL_3491",
   );
-  await page.getByLabel("Theme", { exact: true }).selectOption("dark");
-  await page.getByLabel("Accent", { exact: true }).selectOption("purple");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("radio", { name: "Dark" }).click();
+  await page
+    .getByRole("radiogroup", { name: "Accent" })
+    .getByRole("radio", { name: "Purple" })
+    .click();
+  await page.getByRole("button", { name: "Done" }).click();
   await page.reload();
   await expect(editor).toContainText("PRIVATE_SENTINEL_3491");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(page.locator("html")).toHaveAttribute("data-accent", "purple");
-  await create(page, "Rename / move", "Renamed.md");
+  await page.getByRole("button", { name: "Rename / move" }).click();
+  await submit(page, "Renamed.md");
   await expect(page.locator("#tree")).toContainText("Renamed.md");
   expect(requests.join("\n")).not.toContain("PRIVATE_SENTINEL_3491");
   expect(frames.join("\n")).not.toContain("PRIVATE_SENTINEL_3491");
-  page.once("dialog", (dialog) => {
-    void dialog.accept();
-  });
   await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Delete", exact: true })
+    .click();
   await expect(page.locator("#tree")).not.toContainText("Renamed.md");
 });
 test("continues markdown lists and safely renders preview", async ({
@@ -179,26 +194,41 @@ test("Dropbox PKCE popup and direct browser sync", async ({
     page.getByRole("textbox", { name: "Markdown editor" }),
   ).toContainText("remote edit");
   await expect(page.locator("#workspace")).toBeEnabled();
-  page.once("dialog", (dialog) => {
-    void dialog.accept();
-  });
-  await page.getByRole("button", { name: "Disconnect", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Options for test@example.invalid" })
+    .click();
+  await page.getByRole("menuitem", { name: "Disconnect" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Disconnect", exact: true })
+    .click();
   await expect(page.locator("#accounts")).toBeEmpty();
   await expect(page.locator("#tree")).toContainText("Cloud.md");
 });
 
-test("OneDrive direct download, guarded writes and conflict resolution", async ({
+test("OneDrive direct download, guarded writes and newest-wins reconciliation", async ({
   page,
 }) => {
   let content = "base note",
-    revision = 1;
+    revision = 1,
+    modified = "2024-01-01T00:00:00Z",
+    copy = "";
+  const patches: string[] = [];
   const node = () => ({
     id: "note",
     name: "Shared.md",
     cTag: `c${revision}`,
     eTag: `e${revision}`,
+    fileSystemInfo: { lastModifiedDateTime: modified },
     parentReference: { id: "root" },
   });
+  const copyNode = {
+    id: "copy",
+    name: "Shared (conflicted copy).md",
+    cTag: "cc1",
+    eTag: "ec1",
+    parentReference: { id: "root" },
+  };
   await page.route("https://graph.microsoft.com/**", async (route) => {
     const request = route.request(),
       url = new URL(request.url());
@@ -227,6 +257,14 @@ test("OneDrive direct download, guarded writes and conflict resolution", async (
       revision++;
       return reply(node());
     }
+    if (url.pathname.includes("conflicted") && request.method() === "PUT") {
+      copy = request.postData() ?? "";
+      return reply(copyNode);
+    }
+    if (request.method() === "PATCH") {
+      patches.push(url.pathname.split("/").at(-1)!);
+      return reply(url.pathname.endsWith("/items/copy") ? copyNode : node());
+    }
     if (url.pathname.endsWith("/items/note"))
       return reply({
         ...node(),
@@ -253,7 +291,7 @@ test("OneDrive direct download, guarded writes and conflict resolution", async (
   });
   await page.goto("/");
   await expect(
-    page.getByRole("button", { name: "New note", exact: true }),
+    page.getByRole("button", { name: "New", exact: true }),
   ).toBeEnabled();
   await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -309,13 +347,18 @@ test("OneDrive direct download, guarded writes and conflict resolution", async (
   await expect(page.locator("#status")).toContainText("Saved in this browser");
   content = "theirs";
   revision++;
+  modified = new Date(Date.now() + 60000).toISOString();
   await page.getByRole("button", { name: "Sync now" }).click();
-  await expect(page.locator("#status")).toContainText("1 conflict");
-  await page.getByLabel("Conflict 1 choice").selectOption("both");
-  await page.getByRole("button", { name: "Apply change choices" }).click();
-  await expect(editor).toContainText("mine");
+  await expect(page.locator("#status")).toContainText(
+    "Shared (conflicted copy).md",
+  );
   await expect(editor).toContainText("theirs");
-  expect(content).toBe("mine\ntheirs");
+  await expect(page.locator("#tree")).toContainText(
+    "Shared (conflicted copy).md",
+  );
+  expect(copy).toBe("mine");
+  expect(content).toBe("theirs");
+  expect(patches).toContain("copy");
 });
 
 test("Dropbox rejects a mismatched OAuth state without exchanging tokens", async ({
@@ -341,4 +384,55 @@ test("Dropbox rejects a mismatched OAuth state without exchanging tokens", async
   await expect(page.getByRole("alert")).toContainText("state did not match");
   await expect(page.locator("#accounts")).toBeEmpty();
   expect(exchanged).toBe(false);
+});
+
+test("menus, dialogs and settings work from the keyboard", async ({ page }) => {
+  await page.goto("/");
+  const trigger = page.getByRole("button", { name: "New", exact: true });
+  await trigger.focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("menuitem", { name: "New note" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(
+    page.getByRole("menuitem", { name: "New folder" }),
+  ).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+  await trigger.press("Enter");
+  await page.getByRole("menuitem", { name: "New note" }).press("Enter");
+  const dialog = page.getByRole("dialog", { name: "New note" });
+  await expect(
+    dialog.getByRole("textbox", { name: "Note name" }),
+  ).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator("#tree")).toContainText("No notes yet");
+
+  await trigger.click();
+  await page.getByRole("menuitem", { name: "New folder" }).click();
+  await page.getByRole("textbox", { name: "Folder name" }).fill("../bad");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog").getByRole("alert")).toBeVisible();
+  await page.getByRole("textbox", { name: "Folder name" }).fill("Ideas");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#title")).toContainText("Ideas");
+  await expect(page.locator('#tree button[data-path="Ideas"]')).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  const theme = page.getByRole("radiogroup", { name: "Theme" });
+  await expect(theme.getByRole("radio", { name: "System" })).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(theme.getByRole("radio", { name: "Light" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 });

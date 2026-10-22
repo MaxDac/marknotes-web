@@ -12,7 +12,12 @@ export class FakeDrive implements Remote {
   async download(entry: Entry): Promise<string> {
     return this.data.get(entry.path)!.text;
   }
-  async upload(path: string, text: string, previous?: Entry): Promise<Entry> {
+  async upload(
+    path: string,
+    text: string,
+    previous?: Entry,
+    modifiedAt = Date.now(),
+  ): Promise<Entry> {
     const old = this.data.get(path);
     if (old && old.entry.version !== previous?.version)
       throw new Error("Revision conflict");
@@ -21,6 +26,7 @@ export class FakeDrive implements Remote {
       id: old?.entry.id ?? crypto.randomUUID(),
       folder: false,
       version: String(++this.revision),
+      modifiedAt,
     };
     this.data.set(path, { entry, text });
     return entry;
@@ -44,7 +50,7 @@ export class FakeDrive implements Remote {
     this.manifest = text;
     this.writes++;
   }
-  async edit(path: string, text: string): Promise<void> {
-    await this.upload(path, text, this.data.get(path)?.entry);
+  async edit(path: string, text: string, modifiedAt?: number): Promise<void> {
+    await this.upload(path, text, this.data.get(path)?.entry, modifiedAt);
   }
 }

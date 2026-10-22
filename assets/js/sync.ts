@@ -6,8 +6,8 @@ import {
   isNote,
   parent,
   syncable,
+  type Note,
 } from "./storage";
-import { merge, renderMerge, type Chunk } from "./merge";
 
 export interface Entry {
   path: string;
@@ -15,23 +15,23 @@ export interface Entry {
   folder: boolean;
   version: string;
   tag?: string;
+  /** Epoch ms of the last content change reported by the drive. */
+  modifiedAt?: number;
 }
 export interface Remote {
   snapshot(): Promise<Entry[]>;
   download(entry: Entry): Promise<string>;
-  upload(path: string, text: string, previous?: Entry): Promise<Entry>;
+  /** Uploads text, recording `modifiedAt` as the file's modification time. */
+  upload(
+    path: string,
+    text: string,
+    previous?: Entry,
+    modifiedAt?: number,
+  ): Promise<Entry>;
   mkdir(path: string): Promise<Entry>;
   delete(entry: Entry): Promise<void>;
   readManifest(): Promise<string | null>;
   writeManifest(text: string): Promise<void>;
-}
-export interface Conflict {
-  path: string;
-  mine: string;
-  theirs: string;
-  remote: Entry;
-  chunks: Chunk[];
-  base: string | null;
 }
 interface Manifest {
   format: number;
@@ -86,8 +86,19 @@ function manifest(text: string | null): Manifest | null {
 }
 export interface Outcome {
   changes: number;
-  conflicts: Conflict[];
+  /** Conflicted copies created for versions that lost newest-wins reconciliation. */
+  copies: string[];
   errors: string[];
+}
+/** Local edit time; notes saved before timestamps existed fall back to their last sync. */
+export function localTime(note: Note, record?: RecordState): number {
+  return note.modifiedAt ?? record?.syncedAt ?? 0;
+}
+function copyName(path: string, n: number): string {
+  const dot = path.lastIndexOf(".");
+  const stem = path.slice(0, dot),
+    extension = path.slice(dot);
+  return `${stem} (conflicted copy)${n > 1 ? ` ${n}` : ""}${extension}`;
 }
 export class SyncEngine {
   private records: Map<string, RecordState> = new Map();
@@ -109,7 +120,6 @@ export class SyncEngine {
       remoteId: entry.id,
       version: entry.version,
       hash: text === null ? "" : await hash(text),
-      base: text,
       syncedAt: Date.now(),
     });
     await this.persist();
@@ -117,6 +127,30 @@ export class SyncEngine {
   private async forget(path: string): Promise<void> {
     this.records.delete(path);
     await this.persist();
+  }
+  /** Preserves a losing version beside the note, unless an identical copy already exists. */
+  private async keepCopy(
+    path: string,
+    text: string,
+    modifiedAt: number,
+    remotePaths: Set<string>,
+  ): Promise<string | null> {
+    for (let n = 1; ; n++) {
+      const candidate = copyName(path, n);
+      const existing = await this.store.note(candidate);
+      if (existing && !existing.folder && existing.text === text) return null;
+      if (existing || remotePaths.has(candidate)) continue;
+      const entry = await this.remote.upload(
+        candidate,
+        text,
+        undefined,
+        modifiedAt,
+      );
+      remotePaths.add(candidate);
+      await this.store.write(candidate, text, undefined, modifiedAt);
+      await this.record(entry, text);
+      return candidate;
+    }
   }
   async run(): Promise<Outcome> {
     this.records = new Map(
@@ -133,7 +167,8 @@ export class SyncEngine {
         .filter((e) => syncable(e.path) && (e.folder || isNote(e.path)))
         .map((e) => [e.path, e]),
     );
-    const result: Outcome = { changes: 0, conflicts: [], errors: [] };
+    const result: Outcome = { changes: 0, copies: [], errors: [] };
+    const remotePaths = new Set(remote.keys());
     let previousManifest: Manifest | null = null;
     try {
       previousManifest = manifest(await this.remote.readManifest());
@@ -228,7 +263,15 @@ export class SyncEngine {
         }
         if (l && !r) {
           if (!record || (await hash(l.text)) !== record.hash)
-            await this.record(await this.remote.upload(path, l.text), l.text);
+            await this.record(
+              await this.remote.upload(
+                path,
+                l.text,
+                undefined,
+                localTime(l, record),
+              ),
+              l.text,
+            );
           else {
             if (![...pendingLocal].some((f) => inside(f, path))) {
               await this.store.delete(path);
@@ -241,7 +284,7 @@ export class SyncEngine {
         if (r && !l) {
           if (!record || changed(r, record)) {
             const text = await this.remote.download(r);
-            await this.store.write(path, text);
+            await this.store.write(path, text, undefined, r.modifiedAt);
             await this.record(r, text);
             result.changes++;
           } else {
@@ -264,8 +307,12 @@ export class SyncEngine {
         }
         const lc = !record || localHash !== record.hash;
         const rc = !record || changed(r, record);
+        const mine = localTime(l, record);
         if (lc && !rc) {
-          await this.record(await this.remote.upload(path, l.text, r), l.text);
+          await this.record(
+            await this.remote.upload(path, l.text, r, mine),
+            l.text,
+          );
           continue;
         }
         if (!lc && !rc) continue;
@@ -275,31 +322,27 @@ export class SyncEngine {
           continue;
         }
         if (!lc) {
-          await this.store.write(path, text);
+          await this.store.write(path, text, undefined, r.modifiedAt);
           await this.record(r, text);
           result.changes++;
           continue;
         }
-        const chunks = merge(record?.base ?? null, l.text, text);
-        if (
-          record?.base !== null &&
-          record?.base !== undefined &&
-          !chunks.some((c) => c.conflict)
-        ) {
-          const merged = renderMerge(chunks, []);
-          const updated = await this.remote.upload(path, merged, r);
-          await this.store.write(path, merged);
-          await this.record(updated, merged);
-          result.changes++;
-        } else
-          result.conflicts.push({
-            path,
-            mine: l.text,
-            theirs: text,
-            remote: r,
-            chunks,
-            base: record?.base ?? null,
-          });
+        // Both sides changed: the most recent edit wins and the other is kept as a copy.
+        const theirs = r.modifiedAt ?? record?.syncedAt ?? 0;
+        if (theirs > mine) {
+          const copy = await this.keepCopy(path, l.text, mine, remotePaths);
+          if (copy) result.copies.push(copy);
+          await this.store.write(path, text, undefined, theirs);
+          await this.record(r, text);
+        } else {
+          const copy = await this.keepCopy(path, text, theirs, remotePaths);
+          if (copy) result.copies.push(copy);
+          await this.record(
+            await this.remote.upload(path, l.text, r, mine),
+            l.text,
+          );
+        }
+        result.changes++;
       } catch (error) {
         result.errors.push(`${path}: ${message(error)}`);
       }
@@ -310,10 +353,7 @@ export class SyncEngine {
     ] as const) {
       for (const path of pending) {
         if ([...pending].some((f) => f !== path && inside(f, path))) continue;
-        if (
-          result.errors.length ||
-          result.conflicts.some((c) => inside(path, c.path))
-        )
+        if (result.errors.length || result.copies.some((c) => inside(path, c)))
           continue;
         try {
           if (localDelete) {
@@ -328,7 +368,8 @@ export class SyncEngine {
         }
       }
     }
-    await this.store.put(`${this.account.id}:conflicts`, result.conflicts);
+    // Drop conflicts persisted by the former line-merge sync.
+    await this.store.remove(`${this.account.id}:conflicts`);
     const files = Object.fromEntries(
       [...this.records.values()]
         .filter((r) => !r.folder)
@@ -364,55 +405,6 @@ export class SyncEngine {
     }
     return result;
   }
-  async resolve(
-    conflict: Conflict,
-    text: string,
-    keepBoth = false,
-  ): Promise<void> {
-    const local = await this.store.note(conflict.path);
-    const current = (await this.remote.snapshot()).find(
-      (r) => r.path === conflict.path,
-    );
-    if (
-      local?.text !== conflict.mine ||
-      current?.id !== conflict.remote.id ||
-      current?.version !== conflict.remote.version
-    )
-      throw new Error(
-        "The note changed since this conflict. Sync again before resolving.",
-      );
-    this.records = new Map(
-      ((await this.store.value<RecordState[]>(this.key)) ?? []).map((r) => [
-        r.path,
-        r,
-      ]),
-    );
-    if (keepBoth) {
-      const dot = conflict.path.lastIndexOf(".");
-      const stem = conflict.path.slice(0, dot),
-        extension = conflict.path.slice(dot);
-      let path = `${stem} (conflicted copy)${extension}`,
-        n = 2;
-      const remotePaths = new Set(
-        (await this.remote.snapshot()).map((e) => e.path),
-      );
-      while ((await this.store.note(path)) || remotePaths.has(path))
-        path = `${stem} (conflicted copy) ${n++}${extension}`;
-      const entry = await this.remote.upload(path, conflict.theirs);
-      await this.store.write(path, conflict.theirs);
-      await this.record(entry, conflict.theirs);
-    }
-    const updated = await this.remote.upload(conflict.path, text, current);
-    await this.store.write(conflict.path, text);
-    await this.record(updated, text);
-    const conflicts =
-      (await this.store.value<Conflict[]>(`${this.account.id}:conflicts`)) ??
-      [];
-    await this.store.put(
-      `${this.account.id}:conflicts`,
-      conflicts.filter((c) => c.path !== conflict.path),
-    );
-  }
 }
 export function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -447,7 +439,7 @@ export async function syncAll(
             else pending.push(other);
           }
     } catch (error) {
-      outcomes.set(id, { changes: 0, conflicts: [], errors: [message(error)] });
+      outcomes.set(id, { changes: 0, copies: [], errors: [message(error)] });
     }
   }
   return outcomes;
