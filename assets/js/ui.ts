@@ -12,8 +12,7 @@ import {
   isNote,
 } from "./storage";
 import { drive, type Drive } from "./providers";
-import { SyncEngine, syncAll, message, type Conflict } from "./sync";
-import { renderMerge, type Choice } from "./merge";
+import { syncAll, message } from "./sync";
 
 const palettes = [
   "blue",
@@ -95,7 +94,7 @@ export class NotesUI {
         <label for="accent">Accent</label><select id="accent"></select></section>
         <section class="settings"><h2>Connected drives</h2><p>All connected drives mirror the same local notes. Choose the same cloud folder as Android or desktop.</p>
         <div id="connect"></div><p>Proton Drive - planned. This is a third-party application not officially supported by Proton.</p>
-        <div id="accounts"></div><div id="conflicts"></div></section>
+        <div id="accounts"></div></section>
       </fieldset><dialog id="dialog"></dialog>`;
     this.editor = createEditor(this.get("#editor"), (text) => {
       if (this.loading || !this.current) return;
@@ -321,8 +320,7 @@ export class NotesUI {
     }
     const accounts = this.get("#accounts");
     accounts.replaceChildren();
-    const conflicts = this.get("#conflicts");
-    conflicts.replaceChildren();
+
     for (const account of await this.store.accounts()) {
       const row = element("div");
       row.className = "account";
@@ -366,10 +364,6 @@ export class NotesUI {
         }),
       );
       accounts.append(row);
-      for (const conflict of (await this.store.value<Conflict[]>(
-        `${account.id}:conflicts`,
-      )) ?? [])
-        this.conflictUI(account, conflict);
     }
   }
   private async connect(provider: Account["provider"]): Promise<void> {
@@ -480,71 +474,13 @@ export class NotesUI {
     const errors = [...results.entries()].flatMap(([id, r]) =>
       r.errors.map((e) => `${accounts.find((a) => a.id === id)?.label}: ${e}`),
     );
-    const conflicts = [...results.values()].reduce(
-      (n, r) => n + r.conflicts.length,
-      0,
-    );
+    const copies = [...results.values()].flatMap((r) => r.copies);
     await this.refresh();
     if (this.current) await this.open(this.current.path);
     this.status(
-      `Sync finished${conflicts ? `: ${conflicts} conflict(s) need resolution` : ""}${errors.length ? ` with ${errors.length} error(s)` : ""}`,
+      `Sync finished${copies.length ? `: newest versions kept, older ones saved as ${copies.join(", ")}` : ""}${errors.length ? ` with ${errors.length} error(s)` : ""}`,
     );
     if (errors.length) this.error(errors.join("\n"));
-  }
-  private conflictUI(account: Account, conflict: Conflict): void {
-    const section = element("section");
-    section.className = "conflict";
-    section.append(element("h3", `${conflict.path} (${account.label})`));
-    const choices: Choice[] = [];
-    let index = 0;
-    for (const chunk of conflict.chunks.filter((c) => c.conflict)) {
-      const n = index++;
-      const pre = element(
-        "pre",
-        `Mine:\n${chunk.mine}\nTheirs:\n${chunk.theirs}`,
-      );
-      const select = element("select");
-      select.setAttribute("aria-label", `Conflict ${n + 1} choice`);
-      for (const [value, text] of [
-        ["", "Choose..."],
-        ["mine", "Mine"],
-        ["theirs", "Theirs"],
-        ["both", "Both"],
-        ["neither", "Neither"],
-      ]) {
-        const option = element("option", text);
-        option.value = value;
-        select.append(option);
-      }
-      select.addEventListener("change", () => {
-        choices[n] = select.value as Choice;
-      });
-      section.append(pre, select);
-    }
-    const manual = element("textarea");
-    manual.setAttribute("aria-label", `Manual merge ${conflict.path}`);
-    manual.value = conflict.mine;
-    const resolve = (text: () => string, both = false) => {
-      void this.run(async () => {
-        await new SyncEngine(this.store, account, this.remote(account)).resolve(
-          conflict,
-          text(),
-          both,
-        );
-        await this.sync();
-      });
-    };
-    section.append(
-      button("Apply change choices", () =>
-        resolve(() => renderMerge(conflict.chunks, choices)),
-      ),
-      button("Keep mine", () => resolve(() => conflict.mine)),
-      button("Keep theirs", () => resolve(() => conflict.theirs)),
-      button("Keep both files", () => resolve(() => conflict.mine, true)),
-      manual,
-      button("Save manual merge", () => resolve(() => manual.value)),
-    );
-    this.get("#conflicts").append(section);
   }
   connection(connected: boolean): void {
     const label = this.root.querySelector("#connection");

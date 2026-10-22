@@ -187,18 +187,29 @@ test("Dropbox PKCE popup and direct browser sync", async ({
   await expect(page.locator("#tree")).toContainText("Cloud.md");
 });
 
-test("OneDrive direct download, guarded writes and conflict resolution", async ({
+test("OneDrive direct download, guarded writes and newest-wins reconciliation", async ({
   page,
 }) => {
   let content = "base note",
-    revision = 1;
+    revision = 1,
+    modified = "2024-01-01T00:00:00Z",
+    copy = "";
+  const patches: string[] = [];
   const node = () => ({
     id: "note",
     name: "Shared.md",
     cTag: `c${revision}`,
     eTag: `e${revision}`,
+    fileSystemInfo: { lastModifiedDateTime: modified },
     parentReference: { id: "root" },
   });
+  const copyNode = {
+    id: "copy",
+    name: "Shared (conflicted copy).md",
+    cTag: "cc1",
+    eTag: "ec1",
+    parentReference: { id: "root" },
+  };
   await page.route("https://graph.microsoft.com/**", async (route) => {
     const request = route.request(),
       url = new URL(request.url());
@@ -226,6 +237,14 @@ test("OneDrive direct download, guarded writes and conflict resolution", async (
       content = request.postData() ?? "";
       revision++;
       return reply(node());
+    }
+    if (url.pathname.includes("conflicted") && request.method() === "PUT") {
+      copy = request.postData() ?? "";
+      return reply(copyNode);
+    }
+    if (request.method() === "PATCH") {
+      patches.push(url.pathname.split("/").at(-1)!);
+      return reply(url.pathname.endsWith("/items/copy") ? copyNode : node());
     }
     if (url.pathname.endsWith("/items/note"))
       return reply({
@@ -309,13 +328,18 @@ test("OneDrive direct download, guarded writes and conflict resolution", async (
   await expect(page.locator("#status")).toContainText("Saved in this browser");
   content = "theirs";
   revision++;
+  modified = new Date(Date.now() + 60000).toISOString();
   await page.getByRole("button", { name: "Sync now" }).click();
-  await expect(page.locator("#status")).toContainText("1 conflict");
-  await page.getByLabel("Conflict 1 choice").selectOption("both");
-  await page.getByRole("button", { name: "Apply change choices" }).click();
-  await expect(editor).toContainText("mine");
+  await expect(page.locator("#status")).toContainText(
+    "Shared (conflicted copy).md",
+  );
   await expect(editor).toContainText("theirs");
-  expect(content).toBe("mine\ntheirs");
+  await expect(page.locator("#tree")).toContainText(
+    "Shared (conflicted copy).md",
+  );
+  expect(copy).toBe("mine");
+  expect(content).toBe("theirs");
+  expect(patches).toContain("copy");
 });
 
 test("Dropbox rejects a mismatched OAuth state without exchanging tokens", async ({

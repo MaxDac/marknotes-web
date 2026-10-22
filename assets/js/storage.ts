@@ -5,6 +5,8 @@ export interface Note {
   folder: boolean;
   text: string;
   revision: string;
+  /** Epoch ms of the last content change; absent on notes stored before newest-wins sync. */
+  modifiedAt?: number;
 }
 export interface Account {
   id: string;
@@ -20,7 +22,6 @@ export interface RecordState {
   version: string;
   hash: string;
   syncedAt: number;
-  base: string | null;
 }
 interface Schema extends DBSchema {
   notes: { key: string; value: Note };
@@ -125,6 +126,7 @@ export class Store {
     path: string,
     text: string,
     expectedRevision?: string,
+    modifiedAt = Date.now(),
   ): Promise<Note> {
     validatePath(path);
     if (!isNote(path)) throw new Error("Notes must have a .md extension.");
@@ -162,6 +164,7 @@ export class Store {
       folder: false,
       text,
       revision: crypto.randomUUID(),
+      modifiedAt,
     };
     await tx.store.put(note);
     await tx.done;
@@ -206,6 +209,7 @@ export class Store {
     const p = parent(to);
     if (p && !all.some((n) => n.path === p && n.folder))
       throw new Error("Destination folder does not exist.");
+    const now = Date.now();
     for (const note of all.filter(
       (n) => n.path === from || inside(from, n.path),
     )) {
@@ -214,6 +218,7 @@ export class Store {
         ...note,
         path: to + note.path.slice(from.length),
         revision: crypto.randomUUID(),
+        modifiedAt: now,
       });
     }
     await tx.done;

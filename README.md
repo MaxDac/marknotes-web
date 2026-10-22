@@ -25,8 +25,8 @@ the automated provider tests.
   blocks). It has a formatting toolbar, continues lists, checkboxes and quotes on Enter, and autosaves.
 - **Appearance**: theme System, Light or Dark, and an accent colour from 8 palettes.
 - **Multi-drive two-way sync** with any number of Dropbox and OneDrive accounts. Sync runs in the browser,
-  on load and on **Sync now**. It keeps the `.marknotes/manifest.json` manifest and merges lines three-way. Conflicts are
-  resolved per change: Mine, Theirs, Both, Neither, or edit by hand.
+  on load and on **Sync now**. It keeps the `.marknotes/manifest.json` manifest and reconciles local notes and every
+  connected drive to the most recently edited version; the older version is kept as a `(conflicted copy)` note.
 - **Dropbox / OneDrive login**: OAuth 2 PKCE (Dropbox) and MSAL.js (OneDrive), called directly from the browser in popups.
 - Persisted app-held tokens are stored in IndexedDB, encrypted with a non-extractable AES-GCM WebCrypto key. MSAL's own
   cache stays in memory, not plaintext local/session storage. After reload, the saved access token remains usable until
@@ -48,11 +48,14 @@ All accounts mirror the same local tree; they are not independent notebooks. Dis
 local credentials/history, not local notes or provider-side app authorization.
 
 Sync follows initial listings with Dropbox cursors / Microsoft Graph delta feeds, not background polling. Per-drive
-base content and sync records persist locally. The remote `.marknotes/manifest.json` has `format: 1`, `app: "MarkNotes"`,
+sync records persist locally. The remote `.marknotes/manifest.json` has `format: 1`, `app: "MarkNotes"`,
 device ID, epoch-millisecond timestamps and path-keyed `sha256`/`version`/`syncedAt` entries. Identical content is recognized
-by SHA-256; non-overlapping edits merge against the last synced base. Edits survive opposing deletions.
-Without a base, differing content requires explicit resolution. **Both** concatenates a conflicting hunk;
-**Keep both files** creates a unique ` (conflicted copy).md` sibling. Unresolved conflicts persist across reload.
+by SHA-256. When a note changed in more than one place (this browser, Dropbox, OneDrive, or Proton Drive through the
+Android/desktop apps writing to the same folder), **newest wins**: the version with the latest edit time is kept
+everywhere, and the other is saved as a ` (conflicted copy).md` sibling (` (conflicted copy) 2.md`, … if taken), so no
+edit is lost. Local edit times are recorded per note; drive times come from Dropbox `client_modified` and OneDrive
+`fileSystemInfo.lastModifiedDateTime`, which the web app sets on upload. Equal times prefer the local version. Results
+depend on device clocks being roughly correct. Edits survive opposing deletions.
 Three reconciliation passes per drive bound a multi-drive run; errors and incomplete convergence are reported.
 
 ### Privacy and durability
@@ -127,7 +130,7 @@ Make sure the version-manager shims precede Windows executables on WSL (`asdf ex
 
 Install the E2E browser once: `cd assets && npx playwright install --with-deps chromium`.
 Playwright supplies a fake public Dropbox ID, uses network fixtures (not real accounts), and starts its own server.
-The OneDrive browser fixture seeds encrypted credentials and exercises Graph downloads, conditional updates and conflicts;
+The OneDrive browser fixture seeds encrypted credentials and exercises Graph downloads, conditional updates and newest-wins copies;
 MSAL configuration/login is covered with an SDK mock. These tests do not prove real provider registration/consent.
 If the host cannot install browser libraries, an isolated matching Playwright browser server can be used with
 `PLAYWRIGHT_WS_ENDPOINT=ws://127.0.0.1:3030/ npm run e2e`; the Phoenix server still starts locally.
@@ -236,8 +239,8 @@ curl --fail https://marknotes.fly.dev/health
 
 Do not race a manual deploy with the main/release workflow. After deployment, verify the expected release SHA,
 HTTPS/LiveView startup, one Machine, and both provider sign-ins interactively in your own browser.
-Use disposable notes in the same Android/desktop folder to verify a round-trip, non-overlapping merge and conflict
-resolution. Automated mock results must not be reported as real-account sign-in success.
+Use disposable notes in the same Android/desktop folder to verify a round-trip and that concurrent edits keep the newest
+version plus a conflicted copy. Automated mock results must not be reported as real-account sign-in success.
 
 | Secret | Where | Purpose |
 | --- | --- | --- |

@@ -185,17 +185,12 @@ label {
 #error {
   border-left: 4px solid #dc2626;
 }
-.account,
-.conflict {
+.account {
   padding: 0.7rem;
   margin: 0.5rem 0;
   border: 1px solid var(--line);
 }
-.conflict textarea {
-  display: block;
-  width: 100%;
-  min-height: 10rem;
-}
+
 dialog {
   max-width: min(600px, 95vw);
   max-height: 90vh;
