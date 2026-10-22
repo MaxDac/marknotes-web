@@ -106,6 +106,9 @@ test("builds, edits and reorders a chord sequence stored as a note", async ({
   await expect(editor).toContainText("frets: x 3/3 2/2 0 1/1 0");
   await expect(editor).toContainText("tags: open, major");
   await expect(editor).toContainText("## E5 changed (bass)");
+  await expect(
+    page.getByRole("status").filter({ hasText: "Saved in this browser" }),
+  ).toBeVisible();
 
   await page.reload();
   await expect(sequence.getByLabel("Title")).toHaveValue("Autumn Leaves");
