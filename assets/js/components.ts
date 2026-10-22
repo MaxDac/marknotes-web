@@ -42,14 +42,14 @@ export function icon(name: IconName): SVGSVGElement {
   return svg;
 }
 
-export function logo(): SVGSVGElement {
-  const svg = document.createElementNS(NS, "svg");
-  svg.setAttribute("viewBox", "0 0 32 32");
-  svg.setAttribute("aria-hidden", "true");
-  svg.setAttribute("class", "logo");
-  svg.innerHTML =
-    '<rect width="32" height="32" rx="9" fill="var(--accent)"/><path d="M9 22V10l7 8 7-8v12" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>';
-  return svg;
+/** The shared MarkNotes mark, generated from branding/marknotes-mark.svg. */
+export function logo(): HTMLImageElement {
+  const img = element("img", undefined, "logo");
+  img.src = "/images/marknotes-mark.svg";
+  img.alt = "";
+  img.width = 30;
+  img.height = 30;
+  return img;
 }
 
 export function element<K extends keyof HTMLElementTagNameMap>(

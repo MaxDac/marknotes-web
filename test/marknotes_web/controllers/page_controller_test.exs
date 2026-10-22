@@ -16,6 +16,30 @@ defmodule MarknotesWeb.PageControllerTest do
     refute csp =~ ~r/img-src[^;]*https?:/
   end
 
+  test "links and serves the shared MarkNotes icons", %{conn: conn} do
+    html = conn |> get("/") |> html_response(200)
+    assert html =~ ~s(href="/favicon.svg")
+    assert html =~ ~s(href="/favicon.ico")
+    assert html =~ ~s(rel="apple-touch-icon" href="/apple-touch-icon.png")
+    assert html =~ ~s(rel="manifest" href="/site.webmanifest")
+    assert html =~ ~s(src="/images/marknotes-mark.svg")
+
+    for {path, type} <- [
+          {"/favicon.svg", "image/svg+xml"},
+          {"/favicon.ico", "image/vnd.microsoft.icon"},
+          {"/apple-touch-icon.png", "image/png"},
+          {"/icon-192.png", "image/png"},
+          {"/icon-512.png", "image/png"},
+          {"/site.webmanifest", "application/manifest+json"},
+          {"/images/marknotes-mark.svg", "image/svg+xml"}
+        ] do
+      response = conn |> recycle() |> get(path)
+      assert response.status == 200, path
+      assert [content_type | _] = get_resp_header(response, "content-type")
+      assert content_type =~ type, path
+    end
+  end
+
   test "health is database-free and reports version and revision", %{conn: conn} do
     previous = Application.get_env(:marknotes, :revision)
     on_exit(fn -> Application.put_env(:marknotes, :revision, previous) end)

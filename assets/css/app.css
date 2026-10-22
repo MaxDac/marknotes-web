@@ -982,7 +982,11 @@ a {
 }
 
 .loading {
+  display: flex;
   margin: auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
   color: var(--weak);
 }
 

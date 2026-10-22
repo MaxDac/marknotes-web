@@ -17,7 +17,9 @@ defmodule MarknotesWeb do
   those modules here.
   """
 
-  def static_paths, do: ~w(assets fonts images favicon.ico robots.txt)
+  def static_paths,
+    do:
+      ~w(assets fonts images favicon.ico favicon.svg apple-touch-icon.png icon-192.png icon-512.png site.webmanifest robots.txt)
 
   def router do
     quote do

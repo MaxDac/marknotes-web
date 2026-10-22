@@ -148,6 +148,13 @@ If the host cannot install browser libraries, an isolated matching Playwright br
 To reproduce production-mode E2E, set `MIX_ENV=prod`, `PHX_HOST=localhost`, `PORT=4000` and a throwaway `SECRET_KEY_BASE`,
 then run `mix deps.get --only prod && mix compile && mix assets.deploy` before `cd assets && npm run e2e`.
 
+### Icon
+
+The shared MarkNotes icon (also used by the Android and desktop apps) comes from the master SVGs in `branding/`:
+`marknotes-icon.svg` (app icon) and `marknotes-mark.svg` (in-app logo). The favicons, touch/manifest icons and
+`site.webmanifest` in `priv/static` are generated from them and committed, so builds need no extra tooling. After
+changing a master SVG, regenerate them with `cd branding && npm install --no-package-lock && npm run generate`.
+
 ## CI/CD
 
 - `checks.yml` (reusable) has five required checks: "Elixir (compile, format, credo, test)", "Dialyzer",

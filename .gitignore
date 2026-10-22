@@ -20,3 +20,4 @@ marknotes-*.tar
 .vscode/
 .idea/
 .DS_Store
+/branding/node_modules/
