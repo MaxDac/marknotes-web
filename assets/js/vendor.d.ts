@@ -9,7 +9,7 @@ declare module "phoenix_live_view" {
   }
 }
 declare module "markdown-it-task-lists" {
-  import type { PluginSimple } from "markdown-it";
-  const plugin: PluginSimple;
+  import type { MarkdownIt } from "markdown-it";
+  const plugin: (md: MarkdownIt) => void;
   export default plugin;
 }

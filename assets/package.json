@@ -30,7 +30,6 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.58.0",
-    "@types/markdown-it": "^14.1.2",
     "@types/node": "^26.6.5",
     "@types/phoenix": "^1.6.7",
     "esbuild": "^0.28.1",
