@@ -148,3 +148,22 @@ test("falls back to text when a chord sequence cannot be read", async ({
     page.getByRole("region", { name: "Chord sequence" }),
   ).toContainText("1 C");
 });
+
+test("creates a chord sequence from the empty folder state", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const empty = page.locator("#empty");
+  await expect(empty).toContainText("chord sequence");
+  await empty.getByRole("button", { name: "Create a chord sequence" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("New chord sequence");
+  await dialog.getByRole("textbox").fill("Empty.md");
+  await dialog.getByRole("button", { name: "Create" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole("form", { name: "Chord builder" })).toBeVisible();
+  await expect(
+    page.getByRole("textbox", { name: "Markdown editor" }),
+  ).toBeHidden();
+  await expect(page.locator('#tree [data-path="Empty.md"]')).toBeVisible();
+});

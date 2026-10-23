@@ -371,8 +371,11 @@ export class NotesUI {
       element("h2", "Choose or create a note"),
       element(
         "p",
-        "Pick a note from the sidebar, or start a new one in this folder.",
+        "Pick a note from the sidebar, or start a new note or chord sequence in this folder.",
       ),
+    );
+    const emptyActions = element("div", undefined, "empty-actions");
+    emptyActions.append(
       button(
         "Create a note",
         act(() => this.create(false)),
@@ -381,7 +384,16 @@ export class NotesUI {
           variant: "solid",
         },
       ),
+      button(
+        "Create a chord sequence",
+        act(() => this.create(false, true)),
+        {
+          icon: "chords",
+          variant: "outline",
+        },
+      ),
     );
+    empty.append(emptyActions);
     empty.firstElementChild!.append(icon("file"));
     this.theme = (await this.store.value<string>("theme")) ?? "system";
     const accent = (await this.store.value<string>("accent")) ?? "violet";
