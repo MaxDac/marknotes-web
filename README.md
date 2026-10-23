@@ -39,8 +39,15 @@ the automated provider tests.
   accessible components, no native prompts or selects). **Settings** offers theme System, Light or Dark, and an accent
   colour from 9 palettes.
 - **Multi-drive two-way sync** with any number of Dropbox and OneDrive accounts. Sync runs in the browser,
-  on load and on **Sync now**. It keeps the `.marknotes/manifest.json` manifest and reconciles local notes and every
-  connected drive to the most recently edited version; the older version is kept as a `(conflicted copy)` note.
+  on load and on **Sync now**. The sync algorithm (planning, three-way merge, newest-wins conflicts, manifest,
+  multi-drive scheduling) comes from the shared core [marknotes-sync](https://github.com/MaxDac/marknotes-sync)
+  (`@marknotes/sync`, Rust compiled to WebAssembly), the same core the Android and desktop apps use; the web app only
+  does the I/O. A note changed on both sides is three-way merged; if the edits overlap, the newest version wins and the
+  other is kept as a `(conflicted copy)` note.
+- **Conflicts**: after a sync with conflicts, the **Conflicts** button lists each conflicted copy next to the kept
+  version. Pick per change **Kept**, **Copy**, **Both** or **Neither** and **Merge copy back** (or **Edit merged** by
+  hand) to save the result as the note and delete the copy; **Discard copy** deletes the copy; **Keep both files**
+  dismisses the conflict.
 - **Dropbox / OneDrive login**: OAuth 2 PKCE (Dropbox) and MSAL.js (OneDrive), called directly from the browser in popups.
 - Persisted app-held tokens are stored in IndexedDB, encrypted with a non-extractable AES-GCM WebCrypto key. MSAL's own
   cache stays in memory, not plaintext local/session storage. After reload, the saved access token remains usable until
@@ -64,15 +71,17 @@ local credentials/history, not local notes or provider-side app authorization.
 Sync follows initial listings with Dropbox cursors / Microsoft Graph delta feeds, not background polling. Per-drive
 sync records persist locally. The remote `.marknotes/manifest.json` has `format: 1`, `app: "MarkNotes"`,
 device ID, epoch-millisecond timestamps and path-keyed `sha256`/`version`/`syncedAt` entries. Identical content is recognized
-by SHA-256. When a note changed in more than one place (this browser, Dropbox, OneDrive, or Proton Drive through the
-Android/desktop apps writing to the same folder), **newest wins**: the version with the latest edit time is kept
-everywhere, and the other is saved as a ` (conflicted copy).md` sibling (` (conflicted copy) 2.md`, … if taken), so no
-edit is lost. Local edit times are recorded per note; drive times come from Dropbox `client_modified` and OneDrive
-`fileSystemInfo.lastModifiedDateTime`, which the web app sets on upload. Equal times prefer the local version. Results
-depend on device clocks being roughly correct. Edits survive opposing deletions.
-Three reconciliation passes per drive bound a multi-drive run; errors and incomplete convergence are reported.
-Images in `attachments/` sync as immutable binary files named by their SHA-256: they are uploaded, downloaded or
-deleted, never merged.
+by SHA-256. A note changed in more than one place (this browser, Dropbox, OneDrive, or Proton Drive through the
+Android/desktop apps writing to the same folder) is first three-way merged against the last synced version (kept per
+drive in this browser). If the edits overlap, **newest wins**: the version with the latest edit time is kept
+everywhere, and the other is saved as a ` (conflicted copy).md` sibling (` (conflicted copy) 2.md`, … if taken) with a
+new note id, and uploaded, so no edit is lost. Local edit times are recorded per note; drive times come from Dropbox
+`client_modified` and OneDrive `fileSystemInfo.lastModifiedDateTime`, which the web app sets on upload. Equal times
+prefer the drive's version. Results depend on device clocks being roughly correct. Edits survive opposing deletions.
+Three reconciliation passes per drive bound a multi-drive run; a failing step is reported and the rest of the sync goes on.
+Images in `attachments/` sync as immutable binary files named by their SHA-256 (`attachments/<sha256>.<png|jpg|gif|webp>`;
+other files there are not synced): they are uploaded, downloaded or deleted, never merged. The core is WebAssembly, so
+the CSP allows `'wasm-unsafe-eval'` (WebAssembly compilation only, not JavaScript `eval`).
 
 ### Privacy and durability
 

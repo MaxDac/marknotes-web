@@ -286,6 +286,21 @@ export class Store {
   async deleteAttachment(path: string): Promise<void> {
     await this.db.delete("attachments", path);
   }
+  /** The text of a note the last time it was synced with a drive: the base of later three-way merges. */
+  async base(account: string, path: string): Promise<string | undefined> {
+    return this.value<string>(`${account}:base:${path}`);
+  }
+  async putBase(account: string, path: string, text: string): Promise<void> {
+    await this.put(`${account}:base:${path}`, text);
+  }
+  /** Drops the base copies of `path` and everything inside it. */
+  async deleteBase(account: string, path: string): Promise<void> {
+    const key = `${account}:base:${path}`;
+    const tx = this.db.transaction("values", "readwrite");
+    await tx.store.delete(key);
+    await tx.store.delete(IDBKeyRange.bound(`${key}/`, `${key}/\uffff`));
+    await tx.done;
+  }
   async accounts(): Promise<Account[]> {
     return (await this.value<Account[]>("accounts")) ?? [];
   }

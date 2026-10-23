@@ -52,9 +52,16 @@ above the function, or a documented entry in `.sobelow-conf` for whole-app check
 
 Browser modules (`assets/js/`):
 
-- `storage.ts` — IndexedDB `Store` (notes tree, per-drive sync records) and encrypted credential `Vault`; path validation.
-- `sync.ts` — **sync engine**: manifest (`.marknotes/manifest.json`, `format: 1`), SHA-256 change detection,
-  newest-wins reconciliation with ` (conflicted copy).md` siblings, multi-drive `syncAll`.
+- `storage.ts` — IndexedDB `Store` (notes tree, per-drive sync records and base copies) and encrypted credential
+  `Vault`; path validation.
+- `sync.ts` — **sync executor**: the algorithm (plan, three-way merge, newest-wins reconciliation with
+  ` (conflicted copy).md` siblings, manifest `.marknotes/manifest.json` `format: 1`, multi-drive scheduling) comes from
+  the shared core [marknotes-sync](https://github.com/MaxDac/marknotes-sync) (`@marknotes/sync`, Rust → WebAssembly,
+  installed from its GitHub release tarball). `sync.ts` only lists/hashes the local tree, runs the planned actions
+  against the drive and IndexedDB, and reports conflicts; `syncAll` drives the core's `SyncScheduler`.
+  Change sync semantics in marknotes-sync (and the spec), not here.
+- `conflicts.ts` — conflict merge-back (three-way merge of the conflicted copy into the note, per-hunk
+  Kept/Copy/Both/Neither, edit, discard, keep both) and its dialog view.
 - `providers.ts` — Dropbox and OneDrive (`Drive`/`Remote`) implementations (cursors / Graph delta).
 - `auth.ts` — Dropbox PKCE and MSAL.js; `callback.ts` — OAuth popup callback page.
 - `notemeta.ts` — note ids in YAML front-matter, `marknotes:` links, `@` mention refs.
@@ -96,7 +103,7 @@ only points there). `assets/parity/fixtures.test.ts` runs every `spec/fixtures` 
 
 | App | Repository | Stack | Sync engine lives in |
 | --- | --- | --- | --- |
-| Web (this repo) | [MaxDac/marknotes-web](https://github.com/MaxDac/marknotes-web) | Phoenix LiveView + TypeScript, Fly.io | `assets/js/sync.ts` |
+| Web (this repo) | [MaxDac/marknotes-web](https://github.com/MaxDac/marknotes-web) | Phoenix LiveView + TypeScript, Fly.io | [MaxDac/marknotes-sync](https://github.com/MaxDac/marknotes-sync) (`@marknotes/sync`); executor in `assets/js/sync.ts` |
 | Android | [MaxDac/MarkNotes](https://github.com/MaxDac/MarkNotes) | Kotlin / Gradle | see its `AGENTS.md` |
 | Desktop | [MaxDac/marknotes-electron](https://github.com/MaxDac/marknotes-electron) | Electron / TypeScript | see its `AGENTS.md` |
 | Spec | [MaxDac/marknotes-spec](https://github.com/MaxDac/marknotes-spec) | Markdown + JSON fixtures | `note-format.md`, `features.md`, `fixtures/<area>/*.json` |
@@ -108,7 +115,8 @@ Inspect a sibling without cloning: `gh api repos/MaxDac/<repo>/contents/<path> -
 
 All three apps read and write the same drive folder, so these areas are a **shared contract**:
 note format and front-matter ids, `marknotes:` note links, `attachments/` naming and sync, `.marknotes/manifest.json`
-(format 1), conflict handling (newest wins + conflicted copies), path/name validation, and provider folder layout.
+(format 1), conflict handling (three-way merge, then newest wins + conflicted copies), path/name validation, and
+provider folder layout. The sync algorithm itself is shared code: [marknotes-sync](https://github.com/MaxDac/marknotes-sync).
 
 1. A change to any of these lands in **marknotes-spec first** (`note-format.md`, `features.md` parity matrix and the
    JSON golden fixtures `fixtures/<area>/*.json`).

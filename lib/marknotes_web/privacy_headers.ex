@@ -13,8 +13,10 @@ defmodule MarknotesWeb.PrivacyHeaders do
   end
 
   # CodeMirror uses inline style attributes for layout, not inline scripts.
+  # 'wasm-unsafe-eval' lets the shared sync core (@marknotes/sync) compile its WebAssembly.
   defp policy do
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " <>
+    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; " <>
+      "style-src 'self' 'unsafe-inline'; " <>
       "img-src 'self' data: blob:; font-src 'self'; object-src 'none'; base-uri 'none'; " <>
       "frame-ancestors 'self'; form-action 'none'; " <>
       "connect-src 'self' ws: wss: https:; frame-src 'self' https://login.microsoftonline.com"

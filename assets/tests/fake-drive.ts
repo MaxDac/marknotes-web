@@ -9,6 +9,8 @@ export class FakeDrive implements Remote {
   writes = 0;
   revision = 0;
   fail = false;
+  /** Paths whose upload fails. */
+  failing = new Set<string>();
   async snapshot(): Promise<Entry[]> {
     if (this.fail) throw new Error("Unavailable");
     return [...this.data.values()].map((n) => ({ ...n.entry }));
@@ -27,6 +29,7 @@ export class FakeDrive implements Remote {
     modifiedAt = Date.now(),
   ): Promise<Entry> {
     const old = this.data.get(path);
+    if (this.failing.has(path)) throw new Error("Upload failed");
     if (old && old.entry.version !== previous?.version)
       throw new Error("Revision conflict");
     const entry = {

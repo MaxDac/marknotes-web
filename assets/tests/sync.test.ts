@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { parseManifest } from "@marknotes/sync";
 import { Store, type Account } from "../js/storage";
 import { SyncEngine, localTime, syncAll } from "../js/sync";
 import { isChordSequence, parseChordBody } from "../js/chords";
-import { noteBody } from "../js/notemeta";
+import { noteBody, noteId } from "../js/notemeta";
 import { FakeDrive } from "./fake-drive";
 let store: Store, remote: FakeDrive, engine: SyncEngine;
 const account: Account = {
@@ -12,26 +13,28 @@ const account: Account = {
   label: "test",
   folder: "MarkNotes",
 };
+const second: Account = { ...account, id: "b", provider: "onedrive" };
 beforeEach(async () => {
   store = await Store.open(crypto.randomUUID());
   remote = new FakeDrive();
   engine = new SyncEngine(store, account, remote);
 });
 afterEach(() => store.close());
-describe("sync decision matrix", () => {
-  it("uploads local notes/folders and publishes Android format-1 metadata", async () => {
+describe("sync engine", () => {
+  it("uploads local notes and folders and publishes the manifest", async () => {
     await store.write("folder/n.md", "hello\n");
     expect((await engine.run()).errors).toEqual([]);
+    expect(remote.data.get("folder")?.entry.folder).toBe(true);
     expect(remote.data.get("folder/n.md")?.text).toBe("hello\n");
-    const m = JSON.parse(remote.manifest!);
-    expect(m.format).toBe(1);
-    expect(m.app).toBe("MarkNotes");
-    expect(m.files["folder/n.md"].sha256).toMatch(/^[a-f0-9]{64}$/);
-    expect(m.files["folder/n.md"].version).toBe(
+    const m = parseManifest(remote.manifest!)!;
+    expect(m.deviceId).toBe(await store.deviceId());
+    expect(m.files["folder/n.md"]?.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(m.files["folder/n.md"]?.version).toBe(
       remote.data.get("folder/n.md")?.entry.version,
     );
-    expect(typeof m.updatedAt).toBe("number");
+    remote.uploads = [];
     await engine.run();
+    expect(remote.uploads).toEqual([]);
     expect(remote.writes).toBe(1);
   });
   it("downloads initial remote content and ignores non-Markdown/hidden files", async () => {
@@ -48,7 +51,7 @@ describe("sync decision matrix", () => {
     await engine.run();
     expect(remote.data.get("n.md")?.text).toBe("two");
     await remote.edit("n.md", "three");
-    await engine.run();
+    expect((await engine.run()).changes).toBe(1);
     expect((await store.note("n.md"))?.text).toBe("three");
   });
   it("propagates deletion only when the other side is unchanged", async () => {
@@ -90,6 +93,21 @@ describe("sync decision matrix", () => {
     await engine.run();
     expect(remote.data.size).toBe(0);
   });
+  it("three-way merges edits that do not overlap", async () => {
+    await store.write("n.md", "one\ntwo\nthree\n", undefined, 1000);
+    await engine.run();
+    await store.write("n.md", "ONE\ntwo\nthree\n", undefined, 2000);
+    await remote.edit("n.md", "one\ntwo\nTHREE\n", 3000);
+    const result = await engine.run();
+    expect(result.errors).toEqual([]);
+    expect(result.conflicts).toEqual([]);
+    expect((await store.note("n.md"))?.text).toBe("ONE\ntwo\nTHREE\n");
+    expect(remote.data.get("n.md")?.text).toBe("ONE\ntwo\nTHREE\n");
+    expect(await store.note("n (conflicted copy).md")).toBeUndefined();
+    remote.uploads = [];
+    await engine.run();
+    expect(remote.uploads).toEqual([]);
+  });
   it("keeps the newer drive edit and saves the older local one as a copy", async () => {
     await store.write("n.md", "one", undefined, 1000);
     await engine.run();
@@ -97,7 +115,15 @@ describe("sync decision matrix", () => {
     await remote.edit("n.md", "theirs", 3000);
     const result = await engine.run();
     expect(result.errors).toEqual([]);
-    expect(result.copies).toEqual(["n (conflicted copy).md"]);
+    expect(result.conflicts).toEqual([
+      {
+        path: "n.md",
+        copyPath: "n (conflicted copy).md",
+        winner: "remote",
+        baseText: "one",
+        driveId: "a",
+      },
+    ]);
     const local = await store.note("n.md");
     expect(local?.text).toBe("theirs");
     expect(local?.modifiedAt).toBe(3000);
@@ -107,72 +133,91 @@ describe("sync decision matrix", () => {
     expect(remote.data.get("n (conflicted copy).md")?.entry.modifiedAt).toBe(
       2000,
     );
-    expect((await engine.run()).copies).toEqual([]);
+    remote.uploads = [];
+    expect((await engine.run()).conflicts).toEqual([]);
+    expect(remote.uploads).toEqual([]);
   });
   it("keeps the newer local edit and overwrites the drive", async () => {
     await store.write("n.md", "one", undefined, 1000);
     await engine.run();
     await remote.edit("n.md", "theirs", 2000);
     await store.write("n.md", "mine", undefined, 3000);
-    expect((await engine.run()).copies).toEqual(["n (conflicted copy).md"]);
+    const result = await engine.run();
+    expect(result.conflicts.map((c) => [c.copyPath, c.winner])).toEqual([
+      ["n (conflicted copy).md", "local"],
+    ]);
     expect(remote.data.get("n.md")?.text).toBe("mine");
     expect(remote.data.get("n.md")?.entry.modifiedAt).toBe(3000);
     expect((await store.note("n.md"))?.text).toBe("mine");
     expect((await store.note("n (conflicted copy).md"))?.text).toBe("theirs");
+    expect(remote.data.get("n (conflicted copy).md")?.text).toBe("theirs");
   });
-  it("reconciles differing initial versions by modification time", async () => {
+  it("reconciles differing initial versions by modification time, without a base", async () => {
     await store.write("n.md", "mine", undefined, 1000);
     await remote.edit("n.md", "theirs", 2000);
-    expect((await engine.run()).copies).toHaveLength(1);
+    const { conflicts } = await engine.run();
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]?.baseText).toBeNull();
     expect((await store.note("n.md"))?.text).toBe("theirs");
     expect((await store.note("n (conflicted copy).md"))?.text).toBe("mine");
   });
-  it("prefers the local version when modification times are equal", async () => {
+  it("gives a tie to the drive", async () => {
     await store.write("n.md", "mine", undefined, 2000);
     await remote.edit("n.md", "theirs", 2000);
     await engine.run();
-    expect(remote.data.get("n.md")?.text).toBe("mine");
-    expect((await store.note("n (conflicted copy).md"))?.text).toBe("theirs");
+    expect(remote.data.get("n.md")?.text).toBe("theirs");
+    expect((await store.note("n.md"))?.text).toBe("theirs");
+    expect((await store.note("n (conflicted copy).md"))?.text).toBe("mine");
   });
-  it("gives conflicted copies their own id so links keep targeting the original", async () => {
-    await store.write("n.md", "---\nid: orig1234\n---\nmine", undefined, 1000);
-    await remote.edit("n.md", "---\nid: orig1234\n---\ntheirs", 2000);
+  it("gives conflicted copies a new id so links keep targeting the original", async () => {
+    await store.write("n.md", "---\nid: k7f3q2xa\n---\nmine", undefined, 1000);
+    await remote.edit("n.md", "---\nid: k7f3q2xa\n---\ntheirs", 2000);
     await engine.run();
     const copy = (await store.note("n (conflicted copy).md"))!.text;
     expect(copy).toMatch(/^---\nid: [0-9a-z]{8}\n---\nmine$/);
-    expect(copy).not.toContain("orig1234");
-    expect((await store.note("n.md"))?.text).toContain("orig1234");
-    await store.write("n.md", "---\nid: orig1234\n---\nmine", undefined, 3000);
-    await remote.edit("n.md", "---\nid: orig1234\n---\nnewest", 4000);
-    expect((await engine.run()).copies).toEqual([]);
+    expect(noteId(copy)).not.toBe("k7f3q2xa");
+    expect(remote.data.get("n (conflicted copy).md")?.text).toBe(copy);
+    expect((await store.note("n.md"))?.text).toContain("k7f3q2xa");
+  });
+  it("does not add an id to a copy of a note without one", async () => {
+    await store.write("n.md", "mine", undefined, 1000);
+    await remote.edit("n.md", "theirs", 2000);
+    await engine.run();
+    expect((await store.note("n (conflicted copy).md"))?.text).toBe("mine");
   });
   it("syncs chord sequences as ordinary notes and keeps their type on conflicted copies", async () => {
-    const head = "---\nid: chord123\ntype: chords\n---\n";
+    const head = "---\nid: c4d12345\ntype: chords\n---\n";
     const mine = `${head}## C (guitar)\nfrets: x 3/3 2/2 0 1/1 0\n`;
     const theirs = `${head}## G (guitar)\nfrets: 3/2 2/1 0 0 0 3/3\n`;
     await store.write("song.md", mine, undefined, 1000);
     await engine.run();
     expect(remote.data.get("song.md")?.text).toBe(mine);
-    await store.write("song.md", `${mine}\n`, undefined, 2000);
+    await store.write(
+      "song.md",
+      `${head}## D (guitar)\nfrets: x x 0 2/1 3/3 2/2\n`,
+      undefined,
+      2000,
+    );
     await remote.edit("song.md", theirs, 3000);
-    expect((await engine.run()).copies).toEqual(["song (conflicted copy).md"]);
+    expect((await engine.run()).conflicts.map((c) => c.copyPath)).toEqual([
+      "song (conflicted copy).md",
+    ]);
     expect((await store.note("song.md"))?.text).toBe(theirs);
     const copy = (await store.note("song (conflicted copy).md"))!.text;
     expect(isChordSequence(copy)).toBe(true);
-    expect(copy).not.toContain("chord123");
+    expect(copy).not.toContain("c4d12345");
     expect(parseChordBody(noteBody(copy)).sequence?.chords[0]?.baseName).toBe(
-      "C",
+      "D",
     );
   });
-  it("does not duplicate an identical conflicted copy", async () => {
-    await store.write("n.md", "mine", undefined, 1000);
-    await remote.edit("n.md", "theirs", 2000);
+  it("numbers the copy when the conflicted copy name is taken, keeping the extension's case", async () => {
+    await store.write("n.MD", "mine", undefined, 1000);
+    await store.write("n (conflicted copy).MD", "existing", undefined, 1000);
+    await remote.edit("n.MD", "theirs", 2000);
     await engine.run();
-    await store.write("n.md", "mine", undefined, 3000);
-    await remote.edit("n.md", "newest", 4000);
-    expect((await engine.run()).copies).toEqual([]);
-    expect(await store.note("n (conflicted copy) 2.md")).toBeUndefined();
-    expect((await store.note("n.md"))?.text).toBe("newest");
+    expect((await store.note("n (conflicted copy) 2.MD"))?.text).toBe("mine");
+    expect((await store.note("n (conflicted copy).MD"))?.text).toBe("existing");
+    expect((await store.note("n.MD"))?.text).toBe("theirs");
   });
   it("keeps remote edit times for downloaded notes", async () => {
     await remote.edit("n.md", "remote", 1234);
@@ -195,56 +240,81 @@ describe("sync decision matrix", () => {
     await expect(engine.run()).rejects.toThrow("Unavailable");
     expect((await store.note("n.md"))?.text).toBe("keep");
   });
-  it("matches Android's conflict sibling counter and extension casing", async () => {
-    await store.write("n.MD", "mine", undefined, 1000);
-    await store.write("n (conflicted copy).MD", "existing", undefined, 1000);
-    await remote.edit("n.MD", "theirs", 2000);
-    await engine.run();
-    expect((await store.note("n (conflicted copy) 2.MD"))?.text).toBe("mine");
-    expect((await store.note("n (conflicted copy).MD"))?.text).toBe("existing");
-    expect((await store.note("n.MD"))?.text).toBe("theirs");
+  it("reports a failing step and goes on with the others", async () => {
+    await store.write("a.md", "a");
+    await store.write("b.md", "b");
+    remote.failing.add("a.md");
+    const result = await engine.run();
+    expect(result.errors).toEqual(["a.md: Upload failed"]);
+    expect(remote.data.get("b.md")?.text).toBe("b");
+    expect(parseManifest(remote.manifest!)?.files["b.md"]).toBeDefined();
+    remote.failing.clear();
+    expect((await engine.run()).errors).toEqual([]);
+    expect(remote.data.get("a.md")?.text).toBe("a");
   });
-  it("reports corrupt manifests but still syncs from content", async () => {
+  it("syncs from content when the manifest is unreadable", async () => {
     remote.manifest = "{bad";
     await remote.edit("n.md", "remote");
-    expect((await engine.run()).errors[0]).toContain("Manifest");
+    expect((await engine.run()).errors).toEqual([]);
     expect((await store.note("n.md"))?.text).toBe("remote");
+    expect(parseManifest(remote.manifest)?.files["n.md"]).toBeDefined();
   });
-  it("rejects malformed manifest file entries without skipping note sync", async () => {
-    remote.manifest = JSON.stringify({ format: 1, files: { "n.md": null } });
+  it("syncs even when the manifest cannot be read", async () => {
+    remote.readManifest = () => Promise.reject(new Error("offline"));
     await remote.edit("n.md", "remote");
-    const result = await engine.run();
-    expect(result.errors[0]).toContain("Manifest");
+    expect((await engine.run()).errors).toEqual([]);
     expect((await store.note("n.md"))?.text).toBe("remote");
   });
+  it("keeps base copies per drive and forgets them with the note", async () => {
+    await store.write("f/n.md", "one");
+    await engine.run();
+    expect(await store.base("a", "f/n.md")).toBe("one");
+    await store.delete("f");
+    await engine.run();
+    expect(await store.base("a", "f/n.md")).toBeUndefined();
+  });
+});
+describe("syncAll", () => {
   it("requeues other drives after downloads", async () => {
-    const second = new FakeDrive();
-    await second.edit("new.md", "second");
+    const other = new FakeDrive();
+    await other.edit("new.md", "second");
     const result = await syncAll(store, [
       { account, remote },
-      { account: { ...account, id: "b" }, remote: second },
+      { account: second, remote: other },
     ]);
     expect([...result.values()].flatMap((r) => r.errors)).toEqual([]);
     expect(remote.data.get("new.md")?.text).toBe("second");
   });
-  for (const [first, second] of [
+  it("reports a drive that fails and still syncs the others", async () => {
+    const other = new FakeDrive();
+    remote.fail = true;
+    await store.write("n.md", "local");
+    const result = await syncAll(store, [
+      { account, remote },
+      { account: second, remote: other },
+    ]);
+    expect(result.get("a")?.errors).toEqual(["Unavailable"]);
+    expect(result.get("b")?.errors).toEqual([]);
+    expect(other.data.get("n.md")?.text).toBe("local");
+  });
+  for (const [first, last] of [
     [2000, 3000],
     [3000, 2000],
   ])
-    it(`propagates the newest of local and two drives (${first} vs ${second})`, async () => {
+    it(`propagates the newest of two drives and the copy to every drive (${first} vs ${last})`, async () => {
       const other = new FakeDrive(),
         targets = [
           { account, remote },
-          { account: { ...account, id: "b" }, remote: other },
+          { account: second, remote: other },
         ];
       await store.write("n.md", "base", undefined, 1000);
       await syncAll(store, targets);
       await remote.edit("n.md", "from first", first);
-      await other.edit("n.md", "from second", second);
+      await other.edit("n.md", "from second", last);
       const results = await syncAll(store, targets);
       expect([...results.values()].flatMap((r) => r.errors)).toEqual([]);
       const [winner, loser] =
-        first > second
+        first > last
           ? ["from first", "from second"]
           : ["from second", "from first"];
       for (const drive of [remote, other]) {
@@ -253,8 +323,12 @@ describe("sync decision matrix", () => {
       }
       expect((await store.note("n.md"))?.text).toBe(winner);
       expect((await store.note("n.md"))?.modifiedAt).toBe(
-        Math.max(first, second),
+        Math.max(first, last),
       );
       expect((await store.note("n (conflicted copy).md"))?.text).toBe(loser);
+      const conflicts = [...results.values()].flatMap((r) => r.conflicts);
+      expect(conflicts.map((c) => c.copyPath)).toEqual([
+        "n (conflicted copy).md",
+      ]);
     });
 });
