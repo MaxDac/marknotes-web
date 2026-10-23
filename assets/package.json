@@ -21,7 +21,7 @@
     "dompurify": "^3.3.0",
     "highlight.js": "^11.11.0",
     "idb": "^8.0.3",
-    "markdown-it": "^14.1.0",
+    "markdown-it": "^15.0.3",
     "markdown-it-task-lists": "^2.1.1",
     "phoenix": "^1.8.0",
     "phoenix_html": "^4.3.0",
@@ -30,7 +30,6 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.58.0",
-    "@types/markdown-it": "^14.1.2",
     "@types/node": "^26.6.5",
     "@types/phoenix": "^1.6.7",
     "esbuild": "^0.28.1",

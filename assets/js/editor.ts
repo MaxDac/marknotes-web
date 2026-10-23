@@ -6,14 +6,14 @@ import {
   syntaxHighlighting,
   defaultHighlightStyle,
 } from "@codemirror/language";
-import MarkdownIt from "markdown-it";
+import MarkdownIt, { type Env, type MarkdownIt as Markdown } from "markdown-it";
 import tasks from "markdown-it-task-lists";
 import DOMPurify from "dompurify";
 import hljs from "highlight.js";
 import { isAttachmentPath } from "./attachments";
 import { linkedId } from "./notemeta";
 
-const md: MarkdownIt = new MarkdownIt({
+const md: Markdown = new MarkdownIt({
   html: false,
   linkify: false,
   highlight(code, language): string {
@@ -22,7 +22,7 @@ const md: MarkdownIt = new MarkdownIt({
       : md.utils.escapeHtml(code);
   },
 }).use(tasks);
-export interface PreviewContext {
+export interface PreviewContext extends Env {
   /** Whether a `marknotes:` note id resolves to a note; unresolved links render as broken. */
   resolve?: (id: string) => boolean;
 }
@@ -30,7 +30,7 @@ export interface PreviewContext {
 // as images, and their `src` is set to a local blob URL after sanitizing.
 md.renderer.rules.image = (tokens, index) => {
   const token = tokens[index],
-    src = token.attrGet("src") ?? "",
+    src = String(token.attrGet("src") ?? ""),
     alt = md.utils.escapeHtml(token.content);
   return isAttachmentPath(src)
     ? `<img class="attachment" data-attachment="${src}" alt="${alt}">`
@@ -42,7 +42,7 @@ const renderLinkOpen =
     self.renderToken(tokens, index, options));
 md.renderer.rules.link_open = (tokens, index, options, env, self) => {
   const token = tokens[index],
-    id = linkedId(token.attrGet("href") ?? "");
+    id = linkedId(String(token.attrGet("href") ?? ""));
   if (id) {
     const { resolve } = env as PreviewContext;
     token.attrSet("href", "#");
