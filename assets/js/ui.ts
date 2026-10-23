@@ -37,6 +37,16 @@ import {
 import { drive, type Drive } from "./providers";
 import { syncAll, message } from "./sync";
 import {
+  addConflicts,
+  applyMerge,
+  discardCopy,
+  keepBoth,
+  loadMerge,
+  mergeView,
+  pendingConflicts,
+  type SyncConflict,
+} from "./conflicts";
+import {
   chordLineEnding,
   isChordSequence,
   newChordSequenceText,
@@ -308,6 +318,11 @@ export class NotesUI {
           variant: "outline",
           id: "sync",
         },
+      ),
+      button(
+        "Conflicts",
+        act(() => this.conflicts()),
+        { icon: "alert", variant: "outline", id: "conflicts" },
       ),
       button("Settings", () => this.settings(), {
         icon: "sliders",
@@ -909,6 +924,7 @@ export class NotesUI {
     await this.refresh();
   }
   private async refresh(): Promise<void> {
+    await this.updateConflicts();
     const tree = this.get("#tree");
     tree.replaceChildren();
     const notes = (await this.store.list()).filter(
@@ -1167,16 +1183,85 @@ export class NotesUI {
           (e) => `${accounts.find((a) => a.id === id)?.label}: ${e}`,
         ),
       );
-      const copies = [...results.values()].flatMap((r) => r.copies);
+      const conflicts = [...results.values()].flatMap((r) => r.conflicts);
+      const copies = [...new Set(conflicts.map((c) => c.copyPath))];
+      await addConflicts(this.store, conflicts);
       await this.refresh();
       if (this.current) await this.open(this.current.path);
       this.status(
-        `Sync finished${copies.length ? `: newest versions kept, older ones saved as ${copies.join(", ")}` : ""}${errors.length ? ` with ${errors.length} error(s)` : ""}`,
+        `Sync finished${copies.length ? `: newest versions kept, older ones saved as ${copies.join(", ")} (see Conflicts)` : ""}${errors.length ? ` with ${errors.length} error(s)` : ""}`,
       );
       if (errors.length) this.error(errors.join("\n"));
     } finally {
       this.root.classList.remove("syncing");
     }
+  }
+  /** Shows the Conflicts button, with the number of conflicted copies left to review, only while there are some. */
+  private async updateConflicts(): Promise<void> {
+    const count = (await pendingConflicts(this.store)).length,
+      trigger = this.get<HTMLButtonElement>("#conflicts");
+    trigger.hidden = !count;
+    trigger.querySelector("span")!.textContent = `Conflicts (${count})`;
+  }
+  private async driveName(id: string): Promise<string> {
+    const account = (await this.store.accounts()).find((a) => a.id === id);
+    return account
+      ? `${providerNames[account.provider]} (${account.label})`
+      : "a drive";
+  }
+  /** Lists the conflicted copies with their merge-back view. */
+  private async conflicts(): Promise<void> {
+    await new Promise<void>((resolve) => {
+      const { body, footer, close } = openDialog(
+        "Sync conflicts",
+        resolve,
+        "conflicts",
+      );
+      // Runs inside run(), which already holds the tree lock.
+      const done = async (work: () => Promise<void>) => {
+        await work();
+        await this.refresh();
+        if (this.current) await this.open(this.current.path);
+        await render();
+      };
+      const section = async (conflict: SyncConflict) => {
+        const merge = await loadMerge(this.store, conflict);
+        const item = element("section", undefined, "conflict");
+        item.append(element("h3", conflict.path));
+        if (merge)
+          item.append(
+            mergeView(conflict, await this.driveName(conflict.driveId), merge, {
+              merge: (text) =>
+                done(() => applyMerge(this.store, conflict, text)),
+              discard: () => done(() => discardCopy(this.store, conflict)),
+              keepBoth: () => done(() => keepBoth(this.store, conflict)),
+            }),
+          );
+        return item;
+      };
+      const render = async () => {
+        const pending = await pendingConflicts(this.store);
+        if (!pending.length) {
+          close();
+          resolve();
+          return;
+        }
+        const sections: HTMLElement[] = [];
+        for (const conflict of pending) sections.push(await section(conflict));
+        body.replaceChildren(...sections);
+      };
+      footer.append(
+        button(
+          "Close",
+          () => {
+            close();
+            resolve();
+          },
+          { variant: "outline" },
+        ),
+      );
+      void render();
+    });
   }
   connection(connected: boolean): void {
     const label = this.root.querySelector("#connection");

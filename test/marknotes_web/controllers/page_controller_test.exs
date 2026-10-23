@@ -16,6 +16,12 @@ defmodule MarknotesWeb.PageControllerTest do
     refute csp =~ ~r/img-src[^;]*https?:/
   end
 
+  test "CSP lets the sync core compile WebAssembly but allows no eval", %{conn: conn} do
+    [csp] = conn |> get("/") |> get_resp_header("content-security-policy")
+    assert csp =~ "script-src 'self' 'wasm-unsafe-eval';"
+    refute csp =~ "'unsafe-eval'"
+  end
+
   test "links and serves the shared MarkNotes icons", %{conn: conn} do
     html = conn |> get("/") |> html_response(200)
     assert html =~ ~s(href="/favicon.svg")

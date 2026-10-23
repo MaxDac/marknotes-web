@@ -31,7 +31,17 @@ import {
   splitFrontMatter,
   withId,
 } from "../js/notemeta";
-import { copyName, parseManifest, serializeManifest } from "../js/sync";
+import {
+  SyncScheduler,
+  buildManifest,
+  conflictCopyName,
+  merge3,
+  mergeText,
+  parseManifest,
+  plan,
+  reconcile,
+  serializeManifest,
+} from "@marknotes/sync";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Input = Record<string, any>;
@@ -107,30 +117,30 @@ const mappings: Record<string, Mapping> = {
   "attachments/refs": ({ text }) => ({
     refs: [...referencedAttachments([text])].sort(),
   }),
-  "manifest/parse": ({ json }) => {
-    let manifest;
+  // Sync, manifest and merge come from the shared core (@marknotes/sync); the web app only runs its actions.
+  "sync/plan": (input) => plan(input as Parameters<typeof plan>[0]),
+  "sync/reconcile": (input) =>
+    reconcile(input as Parameters<typeof reconcile>[0]),
+  "sync/multi-drive": ({ driveIds, maxPasses, reports }) => {
+    const scheduler = new SyncScheduler(driveIds, maxPasses);
+    const order: string[] = [];
     try {
-      manifest = parseManifest(json);
-    } catch {
-      return { manifest: null };
+      for (let id = scheduler.next(); id !== undefined; id = scheduler.next()) {
+        const r = reports[order.length];
+        scheduler.report(id, r.localChanges, r.failed);
+        order.push(id);
+      }
+    } finally {
+      scheduler.free();
     }
-    if (!manifest) return { manifest: null };
-    const files = Object.fromEntries(
-      Object.entries(manifest.files).map(([path, f]) => [
-        path,
-        { sha256: f.sha256, version: f.version, syncedAt: f.syncedAt },
-      ]),
-    );
-    return {
-      manifest: {
-        deviceId: manifest.deviceId,
-        updatedAt: manifest.updatedAt,
-        files,
-      },
-    };
+    return { order };
   },
+  "manifest/parse": ({ json }) => ({ manifest: parseManifest(json) }),
   "manifest/serialize": (input) => ({
     json: serializeManifest(input as Parameters<typeof serializeManifest>[0]),
+  }),
+  "manifest/build": ({ records, deviceId, nowMillis, previous }) => ({
+    json: buildManifest(records, deviceId, nowMillis, previous) ?? null,
   }),
   "duplicate-ids/resolve": ({ notes }) => ({
     reassigned: [
@@ -142,10 +152,14 @@ const mappings: Record<string, Mapping> = {
       ),
     ].sort(),
   }),
-  "merge/merge3": {
-    skip: "the web app has no three-way merge; sync is newest-wins with a conflicted copy",
+  "merge/merge3": ({ base, local, remote, choices }) => {
+    const result = merge3(base, local, remote);
+    const text = choices ? mergeText(result.chunks, choices) : result.text;
+    return { text, conflicts: result.conflicts };
   },
-  "merge/conflict-copy-name": ({ path }) => ({ path: copyName(path, 1) }),
+  "merge/conflict-copy-name": ({ path, existingPaths }) => ({
+    path: conflictCopyName(path, existingPaths ?? []),
+  }),
   "chords/detect": ({ text }) => ({ chords: isChordSequence(text) }),
   "chords/parse": ({ body }) => parseChordBody(body),
   "chords/serialize": ({ sequence, lineEnding }) => ({

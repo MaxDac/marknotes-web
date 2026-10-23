@@ -1,20 +1,35 @@
+/**
+ * Two-way sync between the browser's note tree and the linked drives.
+ *
+ * The plan, the three-way merge, the conflict handling, the manifest and the multi-drive order come from the shared
+ * sync core ([marknotes-sync](https://github.com/MaxDac/marknotes-sync)), which implements the marknotes-spec sync
+ * rules for every MarkNotes app. This module only lists both sides, runs the planned actions against the stores and
+ * keeps the per-drive records and base copies.
+ */
+import {
+  type Action,
+  type LocalEntry,
+  type RemoteEntry,
+  type Side,
+  DEFAULT_MAX_PASSES,
+  MANIFEST_PATH,
+  SyncScheduler,
+  buildManifest,
+  isAttachmentPath,
+  isSyncedEntry,
+  plan,
+  reconcile,
+  sha256Hex,
+} from "@marknotes/sync";
 import {
   Store,
   type Account,
-  type RecordState,
-  inside,
-  isNote,
-  parent,
-  syncable,
   type Note,
+  type RecordState,
+  parent,
 } from "./storage";
-import {
-  attachmentHash,
-  inAttachments,
-  isAttachmentPath,
-  sha256,
-} from "./attachments";
-import { newId, noteId, withId } from "./notemeta";
+import { ATTACHMENTS, attachmentHash } from "./attachments";
+import { newId } from "./notemeta";
 
 export interface Entry {
   path: string;
@@ -43,100 +58,61 @@ export interface Remote {
   readManifest(): Promise<string | null>;
   writeManifest(text: string): Promise<void>;
 }
-export interface Manifest {
-  format: number;
-  app: string;
-  deviceId: string;
-  updatedAt: number;
-  files: {
-    [path: string]: { sha256: string; version: string; syncedAt: number };
-  };
-}
-export async function hash(text: string): Promise<string> {
-  const bytes = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(text),
-  );
-  return Array.from(new Uint8Array(bytes), (b) =>
-    b.toString(16).padStart(2, "0"),
-  ).join("");
-}
-/** Parses .marknotes/manifest.json; throws when it is unreadable or not format 1. */
-export function parseManifest(text: string | null): Manifest | null {
-  if (text === null) return null;
-  const m: unknown = JSON.parse(text);
-  if (
-    typeof m !== "object" ||
-    m === null ||
-    !("format" in m) ||
-    m.format !== 1 ||
-    !("files" in m) ||
-    typeof m.files !== "object" ||
-    m.files === null ||
-    Array.isArray(m.files) ||
-    !Object.entries(m.files).every(
-      ([path, value]: [string, unknown]) =>
-        syncable(path) &&
-        (isNote(path) || isAttachmentPath(path)) &&
-        typeof value === "object" &&
-        value !== null &&
-        "sha256" in value &&
-        typeof value.sha256 === "string" &&
-        /^[a-f0-9]{64}$/.test(value.sha256) &&
-        "version" in value &&
-        typeof value.version === "string" &&
-        "syncedAt" in value &&
-        typeof value.syncedAt === "number" &&
-        Number.isFinite(value.syncedAt),
-    )
-  )
-    throw new Error(
-      "Manifest is unreadable or uses an unsupported format; comparing file content instead.",
-    );
-  return m as Manifest;
-}
-/** Compact manifest JSON: keys format, app, deviceId, updatedAt, files; file paths sorted. */
-export function serializeManifest(
-  manifest: Pick<Manifest, "deviceId" | "updatedAt" | "files">,
-): string {
-  const files = Object.fromEntries(
-    Object.entries(manifest.files)
-      .sort(([a], [b]) => (a < b ? -1 : 1))
-      .map(([path, f]) => [
-        path,
-        { sha256: f.sha256, version: f.version, syncedAt: f.syncedAt },
-      ]),
-  );
-  return JSON.stringify({
-    format: 1,
-    app: "MarkNotes",
-    deviceId: manifest.deviceId,
-    updatedAt: manifest.updatedAt,
-    files,
-  });
+/**
+ * A note edited on both sides whose edits could not be merged. The newest version (`winner`) was kept at `path` and
+ * the other one was saved as a new note at `copyPath`; see conflicts.ts to merge it back.
+ */
+export interface SyncConflict {
+  path: string;
+  copyPath: string;
+  winner: Side;
+  /** Text of the note the last time both sides agreed, if known. */
+  baseText: string | null;
+  /** The account (drive) the conflict was found on. */
+  driveId: string;
 }
 export interface Outcome {
+  /** Changes made to the local tree (downloads, local deletions, merges, conflicted copies), which other drives need. */
   changes: number;
-  /** Conflicted copies created for versions that lost newest-wins reconciliation. */
-  copies: string[];
+  conflicts: SyncConflict[];
   errors: string[];
 }
 /** Local edit time; notes saved before timestamps existed fall back to their last sync. */
 export function localTime(note: Note, record?: RecordState): number {
   return note.modifiedAt ?? record?.syncedAt ?? 0;
 }
-const changed = (r: Entry, record: RecordState) =>
-  r.id !== record.remoteId || r.version !== record.version;
-/** <stem> (conflicted copy)[ n].<ext> beside path; 
- > 1 disambiguates taken names. */
-export function copyName(path: string, n: number): string {
-  const dot = path.lastIndexOf(".");
-  const stem = path.slice(0, dot),
-    extension = path.slice(dot);
-  return `${stem} (conflicted copy)${n > 1 ? ` ${n}` : ""}${extension}`;
+export function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
+
+const encoder = new TextEncoder();
+const hashContent = (content: Content): string =>
+  sha256Hex(typeof content === "string" ? encoder.encode(content) : content);
+/** Set once the local `attachments/` folder exists, like a directory on disk that outlives its files. */
+const ATTACHMENTS_FOLDER = "attachments-folder";
+
+const toCore = (e: Entry): RemoteEntry => ({
+  path: e.path,
+  id: e.id,
+  isFolder: e.folder,
+  version: e.version,
+  modifiedMillis: e.modifiedAt ?? 0,
+});
+const fromCore = (e: RemoteEntry): Entry => ({
+  path: e.path,
+  id: e.id,
+  folder: e.isFolder,
+  version: e.version,
+  modifiedAt: e.modifiedMillis,
+});
+
 export class SyncEngine {
-  private records: Map<string, RecordState> = new Map();
+  private records = new Map<string, RecordState>();
+  /** Snapshot entries by path: they carry provider data (such as OneDrive eTags) that the core does not. */
+  private entries = new Map<string, Entry>();
+  private modified = new Map<string, number>();
+  private known = new Set<string>();
+  private result: Outcome = { changes: 0, conflicts: [], errors: [] };
   constructor(
     private store: Store,
     private account: Account,
@@ -145,20 +121,325 @@ export class SyncEngine {
   private get key(): string {
     return `${this.account.id}:records`;
   }
-  private async persist(): Promise<void> {
-    await this.store.put(this.key, [...this.records.values()]);
+  async run(): Promise<Outcome> {
+    this.result = { changes: 0, conflicts: [], errors: [] };
+    this.records = new Map(
+      ((await this.store.value<RecordState[]>(this.key)) ?? []).map((r) => [
+        r.path,
+        r,
+      ]),
+    );
+    const local = await this.listLocal();
+    // A failed snapshot aborts the run before any deletion decision is made.
+    const snapshot = await this.remote.snapshot();
+    this.entries = new Map(snapshot.map((e) => [e.path, e]));
+    this.known = new Set([
+      ...local.map((e) => e.path),
+      ...snapshot.map((e) => e.path),
+    ]);
+    let manifest: string | null = null;
+    try {
+      manifest = await this.remote.readManifest();
+    } catch {
+      // The manifest is an optimisation: sync works without it.
+    }
+    const { actions } = plan({
+      local,
+      remote: snapshot
+        .filter((e) => isSyncedEntry(e.path, e.folder))
+        .map(toCore),
+      records: this.coreRecords(),
+      manifest,
+    });
+    for (const action of actions)
+      await this.guarded(action.path, () => this.apply(action));
+    await this.guarded(MANIFEST_PATH, async () => {
+      const text = buildManifest(
+        this.coreRecords(),
+        await this.store.deviceId(),
+        Date.now(),
+        manifest,
+      );
+      if (text !== null && text !== undefined)
+        await this.remote.writeManifest(text);
+    });
+    // Drop conflicts persisted by the former line-merge sync.
+    await this.store.remove(`${this.account.id}:conflicts`);
+    return this.result;
   }
-  private async record(
-    entry: Entry,
-    text: string | null,
-    digest?: string,
+  private coreRecords() {
+    return [...this.records.values()].map((r) => ({
+      path: r.path,
+      isFolder: r.folder,
+      remoteId: r.remoteId,
+      remoteVersion: r.version,
+      localHash: r.hash,
+      syncedAt: r.syncedAt,
+    }));
+  }
+  private async listLocal(): Promise<LocalEntry[]> {
+    const entries: LocalEntry[] = [];
+    for (const note of await this.store.list()) {
+      if (!isSyncedEntry(note.path, note.folder)) continue;
+      if (note.folder) {
+        entries.push({ path: note.path, isFolder: true });
+        continue;
+      }
+      const modified = localTime(note, this.records.get(note.path));
+      this.modified.set(note.path, modified);
+      entries.push({
+        path: note.path,
+        isFolder: false,
+        modifiedMillis: modified,
+        sha256: hashContent(note.text),
+      });
+    }
+    const attachments = (await this.store.attachments()).filter((a) =>
+      isSyncedEntry(a.path, false),
+    );
+    let folder = !!(await this.store.value<boolean>(ATTACHMENTS_FOLDER));
+    if (attachments.length && !folder) {
+      await this.store.put(ATTACHMENTS_FOLDER, true);
+      folder = true;
+    }
+    if (folder) entries.push({ path: ATTACHMENTS, isFolder: true });
+    for (const a of attachments) {
+      this.modified.set(a.path, a.modifiedAt);
+      entries.push({
+        path: a.path,
+        isFolder: false,
+        modifiedMillis: a.modifiedAt,
+        sha256: sha256Hex(a.bytes),
+      });
+    }
+    return entries;
+  }
+  private async guarded(path: string, step: () => Promise<void>) {
+    try {
+      await step();
+    } catch (error) {
+      this.result.errors.push(`${path}: ${message(error)}`);
+    }
+  }
+  private entry(remote: RemoteEntry): Entry {
+    return this.entries.get(remote.path) ?? fromCore(remote);
+  }
+  private async apply(action: Action): Promise<void> {
+    switch (action.kind) {
+      case "error":
+        this.result.errors.push(`${action.path}: ${action.message}`);
+        return;
+      case "recordFolder":
+        return this.recordFolder(action.path, action.remoteId);
+      case "createRemoteFolder":
+        return this.recordFolder(
+          action.path,
+          (await this.remote.mkdir(action.path)).id,
+        );
+      case "createLocalFolder":
+        await this.createLocalFolder(action.path);
+        await this.recordFolder(action.path, action.remoteId);
+        this.result.changes++;
+        return;
+      case "forget":
+        return this.forget(action.path);
+      case "uploadNew":
+      case "uploadRevision": {
+        const content = await this.read(action.path);
+        const previous =
+          action.kind === "uploadRevision"
+            ? this.entry(action.remote)
+            : undefined;
+        const uploaded = await this.remote.upload(
+          action.path,
+          content,
+          previous,
+          this.modified.get(action.path),
+        );
+        return this.recordFile(action.path, uploaded, content);
+      }
+      case "download":
+        await this.download(action.path, this.entry(action.remote));
+        this.result.changes++;
+        return;
+      case "record": {
+        await this.upsert(
+          action.path,
+          this.entry(action.remote),
+          action.sha256,
+        );
+        if (action.updateBase && !isAttachmentPath(action.path))
+          await this.store.putBase(
+            this.account.id,
+            action.path,
+            await this.readText(action.path),
+          );
+        return;
+      }
+      case "deleteLocal":
+        if (isAttachmentPath(action.path))
+          await this.store.deleteAttachment(action.path);
+        else await this.store.delete(action.path);
+        await this.forget(action.path);
+        this.result.changes++;
+        return;
+      case "deleteRemote":
+        await this.remote.delete(this.entry(action.remote));
+        return this.forget(action.path);
+      case "deleteLocalFolder":
+        if (action.path === ATTACHMENTS) {
+          for (const path of await this.store.attachmentPaths())
+            await this.store.deleteAttachment(path);
+          await this.store.remove(ATTACHMENTS_FOLDER);
+        } else await this.store.delete(action.path);
+        await this.forgetTree(action.path, action.forget);
+        this.result.changes++;
+        return;
+      case "deleteRemoteFolder":
+        await this.remote.delete(this.entry(action.remote));
+        return this.forgetTree(action.path, action.forget);
+      case "reconcile":
+        return this.reconcile(action.path, action.remote, action.hasRecord);
+    }
+  }
+  /** The note changed on both sides: keep it, merge it, or keep the newest and save the other as a copy. */
+  private async reconcile(
+    path: string,
+    remoteEntry: RemoteEntry,
+    hasRecord: boolean,
   ): Promise<void> {
-    this.records.set(entry.path, {
-      path: entry.path,
-      folder: entry.folder,
+    const entry = this.entry(remoteEntry);
+    const local = await this.readText(path);
+    const remote = await this.remote.download(entry);
+    const baseText = hasRecord
+      ? ((await this.store.base(this.account.id, path)) ?? null)
+      : null;
+    const localModified = this.modified.get(path) ?? 0;
+    const outcome = reconcile({
+      path,
+      local,
+      localModifiedMillis: localModified,
+      remote,
+      remoteEntry,
+      base: baseText,
+      existingPaths: [...this.known],
+      newId: newId(),
+    });
+    switch (outcome.kind) {
+      case "same":
+        return this.recordFile(path, entry, local);
+      case "merged": {
+        const now = Date.now();
+        await this.store.write(path, outcome.text, undefined, now);
+        await this.recordFile(
+          path,
+          await this.remote.upload(path, outcome.text, entry, now),
+          outcome.text,
+        );
+        this.result.changes++;
+        return;
+      }
+      case "newestWins": {
+        const localWins = outcome.winner === "local";
+        if (localWins)
+          await this.recordFile(
+            path,
+            await this.remote.upload(path, local, entry, localModified),
+            local,
+          );
+        else {
+          await this.store.write(path, remote, undefined, entry.modifiedAt);
+          await this.recordFile(path, entry, remote);
+        }
+        // The copy keeps the modification time of the version that lost.
+        const copyTime = localWins ? entry.modifiedAt : localModified;
+        await this.store.write(
+          outcome.copyPath,
+          outcome.copyText,
+          undefined,
+          copyTime,
+        );
+        this.known.add(outcome.copyPath);
+        this.result.conflicts.push({
+          path,
+          copyPath: outcome.copyPath,
+          winner: outcome.winner,
+          baseText,
+          driveId: this.account.id,
+        });
+        this.result.changes++;
+        await this.recordFile(
+          outcome.copyPath,
+          await this.remote.upload(
+            outcome.copyPath,
+            outcome.copyText,
+            undefined,
+            copyTime,
+          ),
+          outcome.copyText,
+        );
+        return;
+      }
+    }
+  }
+  private async read(path: string): Promise<Content> {
+    if (!isAttachmentPath(path)) return this.readText(path);
+    const file = await this.store.attachment(path);
+    if (!file) throw new Error("no longer exists in this browser");
+    return file.bytes;
+  }
+  private async readText(path: string): Promise<string> {
+    const note = await this.store.note(path);
+    if (!note || note.folder)
+      throw new Error("no longer exists in this browser");
+    return note.text;
+  }
+  private async download(path: string, entry: Entry): Promise<void> {
+    if (isAttachmentPath(path)) {
+      const bytes = await this.remote.downloadBytes(entry);
+      if (sha256Hex(bytes) !== attachmentHash(path))
+        throw new Error("content does not match its name; skipped");
+      await this.store.putAttachment(path, bytes, entry.modifiedAt);
+      await this.store.put(ATTACHMENTS_FOLDER, true);
+      return this.recordFile(path, entry, bytes);
+    }
+    const text = await this.remote.download(entry);
+    await this.store.write(path, text, undefined, entry.modifiedAt);
+    return this.recordFile(path, entry, text);
+  }
+  private async createLocalFolder(path: string): Promise<void> {
+    if (path === ATTACHMENTS) await this.store.put(ATTACHMENTS_FOLDER, true);
+    else if (!(await this.store.note(path)))
+      await this.store.create(path, true);
+  }
+  /** Records a synced file and, for notes, keeps `content` as the base copy for later merges. */
+  private async recordFile(
+    path: string,
+    entry: Entry,
+    content: Content,
+  ): Promise<void> {
+    await this.upsert(path, entry, hashContent(content));
+    if (typeof content === "string" && !isAttachmentPath(path))
+      await this.store.putBase(this.account.id, path, content);
+  }
+  private async upsert(path: string, entry: Entry, hash: string) {
+    this.records.set(path, {
+      path,
+      folder: false,
       remoteId: entry.id,
       version: entry.version,
-      hash: digest ?? (text === null ? "" : await hash(text)),
+      hash,
+      syncedAt: Date.now(),
+    });
+    await this.persist();
+  }
+  private async recordFolder(path: string, remoteId: string): Promise<void> {
+    this.records.set(path, {
+      path,
+      folder: true,
+      remoteId,
+      version: "",
+      hash: "",
       syncedAt: Date.now(),
     });
     await this.persist();
@@ -166,394 +447,51 @@ export class SyncEngine {
   private async forget(path: string): Promise<void> {
     this.records.delete(path);
     await this.persist();
+    await this.store.deleteBase(this.account.id, path);
   }
-  /** Preserves a losing version beside the note, unless an identical copy already exists. */
-  private async keepCopy(
-    path: string,
-    text: string,
-    modifiedAt: number,
-    remotePaths: Set<string>,
-  ): Promise<string | null> {
-    // The copy is a distinct note, so it must not share the original's id.
-    if (noteId(text)) text = withId(text, newId());
-    for (let n = 1; ; n++) {
-      const candidate = copyName(path, n);
-      const existing = await this.store.note(candidate);
-      if (
-        existing &&
-        !existing.folder &&
-        withId(existing.text, "") === withId(text, "")
-      )
-        return null;
-      if (existing || remotePaths.has(candidate)) continue;
-      const entry = await this.remote.upload(
-        candidate,
-        text,
-        undefined,
-        modifiedAt,
-      );
-      remotePaths.add(candidate);
-      await this.store.write(candidate, text, undefined, modifiedAt);
-      await this.record(entry, text);
-      return candidate;
-    }
+  private async forgetTree(folder: string, paths: string[]): Promise<void> {
+    for (const path of [folder, ...paths]) this.records.delete(path);
+    await this.persist();
+    await this.store.deleteBase(this.account.id, folder);
   }
-  /** Attachments are immutable and named by content hash: transfer or delete, never merge. */
-  private async attachments(
-    remote: Map<string, Entry>,
-    result: Outcome,
-  ): Promise<void> {
-    const local = new Set(await this.store.attachmentPaths());
-    const paths = [
-      ...new Set([
-        ...local,
-        ...remote.keys(),
-        ...[...this.records.keys()].filter(isAttachmentPath),
-      ]),
-    ].sort();
-    for (const path of paths) {
-      try {
-        const l = local.has(path),
-          r = remote.get(path),
-          record = this.records.get(path),
-          digest = attachmentHash(path)!;
-        if (!l && !r) await this.forget(path);
-        else if (l && r) {
-          if (!record || changed(r, record)) await this.record(r, null, digest);
-        } else if (l) {
-          if (record) {
-            await this.store.deleteAttachment(path);
-            await this.forget(path);
-            result.changes++;
-          } else {
-            const file = await this.store.attachment(path);
-            await this.record(
-              await this.remote.upload(
-                path,
-                file!.bytes,
-                undefined,
-                file!.modifiedAt,
-              ),
-              null,
-              digest,
-            );
-          }
-        } else if (r) {
-          if (record) {
-            await this.remote.delete(r);
-            await this.forget(path);
-          } else {
-            const bytes = await this.remote.downloadBytes(r);
-            if ((await sha256(bytes)) !== digest)
-              throw new Error("content does not match its name; skipped");
-            await this.store.putAttachment(path, bytes, r.modifiedAt);
-            await this.record(r, null, digest);
-            result.changes++;
-          }
-        }
-      } catch (error) {
-        result.errors.push(`${path}: ${message(error)}`);
-      }
-    }
-  }
-  async run(): Promise<Outcome> {
-    this.records = new Map(
-      ((await this.store.value<RecordState[]>(this.key)) ?? []).map((r) => [
-        r.path,
-        r,
-      ]),
-    );
-    const local = new Map((await this.store.list()).map((n) => [n.path, n]));
-    // A failed snapshot aborts the run before any deletion decision is made.
-    const entries = await this.remote.snapshot();
-    const remote = new Map(
-      entries
-        .filter(
-          (e) =>
-            syncable(e.path) &&
-            !inAttachments(e.path) &&
-            (e.folder || isNote(e.path)),
-        )
-        .map((e) => [e.path, e]),
-    );
-    const remoteAttachments = new Map(
-      entries
-        .filter((e) => !e.folder && isAttachmentPath(e.path))
-        .map((e) => [e.path, e]),
-    );
-    const result: Outcome = { changes: 0, copies: [], errors: [] };
-    const remotePaths = new Set(remote.keys());
-    let previousManifest: Manifest | null = null;
-    try {
-      previousManifest = parseManifest(await this.remote.readManifest());
-    } catch (error) {
-      result.errors.push(`Manifest: ${message(error)}`);
-    }
-    const pendingLocal = new Set<string>(),
-      pendingRemote = new Set<string>(),
-      skipped = new Set<string>();
-    const paths = [
-      ...new Set([...local.keys(), ...remote.keys(), ...this.records.keys()]),
-    ]
-      .filter((p) => !inAttachments(p))
-      .sort();
-    for (const path of paths) {
-      const l = local.get(path),
-        r = remote.get(path);
-      if (l && r && l.folder !== r.folder) {
-        skipped.add(path);
-        result.errors.push(
-          `${path}: is a file on one side and a folder on the other`,
-        );
-      }
-    }
-    const blocked = (path: string) =>
-      [...skipped].some((s) => s === path || inside(s, path));
-    const folders = paths
-      .filter(
-        (p) =>
-          local.get(p)?.folder ||
-          remote.get(p)?.folder ||
-          this.records.get(p)?.folder,
-      )
-      .sort((a, b) => a.split("/").length - b.split("/").length);
-    for (const path of folders) {
-      if (blocked(path)) continue;
-      try {
-        const l = local.get(path),
-          r = remote.get(path),
-          record = this.records.get(path);
-        if (l && r) {
-          await this.record(r, null);
-          continue;
-        }
-        if (l) {
-          const survivors = await Promise.all(
-            [...local.values()]
-              .filter((n) => inside(path, n.path))
-              .map(async (n) => {
-                const old = this.records.get(n.path);
-                return !old || (!n.folder && (await hash(n.text)) !== old.hash);
-              }),
-          );
-          if (!record || survivors.some(Boolean))
-            await this.record(await this.remote.mkdir(path), null);
-          else pendingLocal.add(path);
-        } else if (r) {
-          const survivors = [...remote.values()].some(
-            (e) =>
-              inside(path, e.path) &&
-              (!this.records.has(e.path) ||
-                (!e.folder && changed(e, this.records.get(e.path)!))),
-          );
-          if (!record || survivors) {
-            if (!(await this.store.note(path)))
-              await this.store.create(path, true);
-            await this.record(r, null);
-            result.changes++;
-          } else pendingRemote.add(path);
-        } else await this.forget(path);
-      } catch (error) {
-        skipped.add(path);
-        result.errors.push(`${path}: ${message(error)}`);
-      }
-    }
-    for (const path of paths.filter(
-      (p) =>
-        !(
-          local.get(p)?.folder ||
-          remote.get(p)?.folder ||
-          this.records.get(p)?.folder
-        ),
-    )) {
-      if (blocked(path) || !isNote(path)) continue;
-      try {
-        const l = local.get(path),
-          r = remote.get(path),
-          record = this.records.get(path);
-        if (!l && !r) {
-          await this.forget(path);
-          continue;
-        }
-        if (l && !r) {
-          if (!record || (await hash(l.text)) !== record.hash)
-            await this.record(
-              await this.remote.upload(
-                path,
-                l.text,
-                undefined,
-                localTime(l, record),
-              ),
-              l.text,
-            );
-          else {
-            if (![...pendingLocal].some((f) => inside(f, path))) {
-              await this.store.delete(path);
-              result.changes++;
-            }
-            await this.forget(path);
-          }
-          continue;
-        }
-        if (r && !l) {
-          if (!record || changed(r, record)) {
-            const text = await this.remote.download(r);
-            await this.store.write(path, text, undefined, r.modifiedAt);
-            await this.record(r, text);
-            result.changes++;
-          } else {
-            if (![...pendingRemote].some((f) => inside(f, path)))
-              await this.remote.delete(r);
-            await this.forget(path);
-          }
-          continue;
-        }
-        if (!l || !r) continue;
-        const localHash = await hash(l.text);
-        const mh = previousManifest?.files[r.path];
-        const remoteHash =
-          mh?.version === r.version && typeof mh.sha256 === "string"
-            ? mh.sha256
-            : undefined;
-        if (localHash === remoteHash) {
-          await this.record(r, l.text);
-          continue;
-        }
-        const lc = !record || localHash !== record.hash;
-        const rc = !record || changed(r, record);
-        const mine = localTime(l, record);
-        if (lc && !rc) {
-          await this.record(
-            await this.remote.upload(path, l.text, r, mine),
-            l.text,
-          );
-          continue;
-        }
-        if (!lc && !rc) continue;
-        const text = await this.remote.download(r);
-        if (text === l.text) {
-          await this.record(r, text);
-          continue;
-        }
-        if (!lc) {
-          await this.store.write(path, text, undefined, r.modifiedAt);
-          await this.record(r, text);
-          result.changes++;
-          continue;
-        }
-        // Both sides changed: the most recent edit wins and the other is kept as a copy.
-        const theirs = r.modifiedAt ?? record?.syncedAt ?? 0;
-        if (theirs > mine) {
-          const copy = await this.keepCopy(path, l.text, mine, remotePaths);
-          if (copy) result.copies.push(copy);
-          await this.store.write(path, text, undefined, theirs);
-          await this.record(r, text);
-        } else {
-          const copy = await this.keepCopy(path, text, theirs, remotePaths);
-          if (copy) result.copies.push(copy);
-          await this.record(
-            await this.remote.upload(path, l.text, r, mine),
-            l.text,
-          );
-        }
-        result.changes++;
-      } catch (error) {
-        result.errors.push(`${path}: ${message(error)}`);
-      }
-    }
-    await this.attachments(remoteAttachments, result);
-    for (const [pending, localDelete] of [
-      [pendingLocal, true],
-      [pendingRemote, false],
-    ] as const) {
-      for (const path of pending) {
-        if ([...pending].some((f) => f !== path && inside(f, path))) continue;
-        if (result.errors.length || result.copies.some((c) => inside(path, c)))
-          continue;
-        try {
-          if (localDelete) {
-            await this.store.delete(path);
-            result.changes++;
-          } else await this.remote.delete(remote.get(path)!);
-          for (const key of this.records.keys())
-            if (key === path || inside(path, key)) this.records.delete(key);
-          await this.persist();
-        } catch (error) {
-          result.errors.push(`${path}: ${message(error)}`);
-        }
-      }
-    }
-    // Drop conflicts persisted by the former line-merge sync.
-    await this.store.remove(`${this.account.id}:conflicts`);
-    const files = Object.fromEntries(
-      [...this.records.values()]
-        .filter((r) => !r.folder)
-        .sort((a, b) => (a.path < b.path ? -1 : 1))
-        .map((r) => [
-          r.path,
-          { sha256: r.hash, version: r.version, syncedAt: r.syncedAt },
-        ]),
-    );
-    const comparable = (f: Manifest["files"]) =>
-      JSON.stringify(
-        Object.entries(f)
-          .sort(([a], [b]) => (a < b ? -1 : 1))
-          .map(([p, v]) => [p, v.sha256, v.version]),
-      );
-    if (
-      !previousManifest ||
-      comparable(files) !== comparable(previousManifest.files)
-    ) {
-      try {
-        await this.remote.writeManifest(
-          serializeManifest({
-            deviceId: await this.store.deviceId(),
-            updatedAt: Date.now(),
-            files,
-          }),
-        );
-      } catch (error) {
-        result.errors.push(`Manifest: ${message(error)}`);
-      }
-    }
-    return result;
+  private async persist(): Promise<void> {
+    await this.store.put(this.key, [...this.records.values()]);
   }
 }
-export function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+
+/**
+ * Keeps the browser's note tree and every linked drive identical. The order comes from the core's `SyncScheduler`:
+ * when a drive brings local changes, the other drives are synced again so they receive them (at most
+ * `DEFAULT_MAX_PASSES` times each). Each outcome holds the last pass's errors and the conflicts of every pass.
+ */
 export async function syncAll(
   store: Store,
   targets: { account: Account; remote: Remote }[],
 ): Promise<Map<string, Outcome>> {
-  const pending = [...targets],
-    counts = new Map<string, number>(),
-    outcomes = new Map<string, Outcome>();
-  while (pending.length) {
-    const target = pending.shift()!,
-      id = target.account.id,
-      count = counts.get(id) ?? 0;
-    if (count >= 3) continue;
-    counts.set(id, count + 1);
-    try {
-      const result = await new SyncEngine(
-        store,
-        target.account,
-        target.remote,
-      ).run();
-      outcomes.set(id, result);
-      if (result.changes)
-        for (const other of targets)
-          if (other !== target && !pending.includes(other)) {
-            if ((counts.get(other.account.id) ?? 0) >= 3)
-              result.errors.push(
-                "Reconciliation limit reached; sync again to propagate remaining changes.",
-              );
-            else pending.push(other);
-          }
-    } catch (error) {
-      outcomes.set(id, { changes: 0, copies: [], errors: [message(error)] });
+  const byId = new Map(targets.map((t) => [t.account.id, t]));
+  const outcomes = new Map<string, Outcome>();
+  const scheduler = new SyncScheduler([...byId.keys()], DEFAULT_MAX_PASSES);
+  try {
+    for (let id = scheduler.next(); id !== undefined; id = scheduler.next()) {
+      const target = byId.get(id)!;
+      let outcome: Outcome,
+        failed = false;
+      try {
+        outcome = await new SyncEngine(
+          store,
+          target.account,
+          target.remote,
+        ).run();
+      } catch (error) {
+        outcome = { changes: 0, conflicts: [], errors: [message(error)] };
+        failed = true;
+      }
+      outcome.conflicts.unshift(...(outcomes.get(id)?.conflicts ?? []));
+      outcomes.set(id, outcome);
+      scheduler.report(id, failed ? 0 : outcome.changes, failed);
     }
+  } finally {
+    scheduler.free();
   }
   return outcomes;
 }

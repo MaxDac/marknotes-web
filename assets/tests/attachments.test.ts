@@ -113,6 +113,19 @@ describe("attachment storage and sync", () => {
     ]);
     expect((await store.list()).map((n) => n.path)).toEqual([]);
   });
+  it("syncs only attachments named by their hash, and keeps no base copy of them", async () => {
+    const data = bytes("img");
+    const path = await attachmentPath(data, "image/png");
+    await store.putAttachment(path, data);
+    await store.putAttachment("attachments/photo.png", data);
+    await remote.upload("attachments/holiday.jpg", data);
+    const result = await new SyncEngine(store, account, remote).run();
+    expect(result.errors).toEqual([]);
+    expect(remote.data.has(path)).toBe(true);
+    expect(remote.data.has("attachments/photo.png")).toBe(false);
+    expect(await store.attachment("attachments/holiday.jpg")).toBeUndefined();
+    expect(await store.base("a", path)).toBeUndefined();
+  });
   it("propagates deletions both ways and to every linked drive", async () => {
     const other = new FakeDrive(),
       second = { ...account, id: "b" };

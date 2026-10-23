@@ -360,6 +360,16 @@ test("OneDrive direct download, guarded writes and newest-wins reconciliation", 
   expect(copy).toMatch(/^---\nid: [0-9a-z]{8}\n---\nmine$/);
   expect(content).toBe("theirs");
   expect(patches).toContain("copy");
+  await page.getByRole("button", { name: "Conflicts (1)" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText(
+    "The newest version (from OneDrive (graph@example.invalid)) was kept",
+  );
+  await expect(dialog).toContainText("Conflicted copy");
+  await dialog.getByRole("button", { name: "Discard copy" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.locator("#tree")).not.toContainText("conflicted copy");
+  await expect(page.locator("#conflicts")).toBeHidden();
 });
 
 test("Dropbox rejects a mismatched OAuth state without exchanging tokens", async ({

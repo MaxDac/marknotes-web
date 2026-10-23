@@ -877,6 +877,75 @@ a {
   gap: 10px;
 }
 
+/* Conflicts */
+#conflicts[hidden] {
+  display: none;
+}
+.modal.conflicts {
+  width: min(760px, calc(100vw - 32px));
+}
+.conflict + .conflict {
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.conflict h3 {
+  color: var(--fg);
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+.merge-view,
+.merge-chunks,
+.merge-conflict {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.merge-conflict {
+  padding: 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+}
+.merge-conflict .merge-title {
+  color: var(--fg);
+  font-size: 13px;
+}
+.merge-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+.merge-text {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  background: var(--hover);
+  color: var(--fg);
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.merge-resolved .merge-text {
+  color: var(--weak);
+}
+.merge-local .merge-text {
+  border-left: 3px solid var(--accent);
+}
+.merge-remote .merge-text {
+  border-left: 3px solid var(--danger);
+}
+.merge-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.merge-editor {
+  height: 280px;
+  padding: 8px 12px;
+  font-family: ui-monospace, monospace;
+  resize: vertical;
+}
+
 /* Toast */
 .toast {
   position: fixed;
