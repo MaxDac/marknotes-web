@@ -273,6 +273,135 @@ describe("sync engine", () => {
     await engine.run();
     expect(await store.base("a", "f/n.md")).toBeUndefined();
   });
+  it("does not overwrite a note saved while its download was in flight", async () => {
+    await store.write("n.md", "one", undefined, 1000);
+    await engine.run();
+    await remote.edit("n.md", "two", 2000);
+    remote.onDownload = async () => {
+      remote.onDownload = undefined;
+      await store.write("n.md", "local edit", undefined, 3000);
+    };
+    const result = await engine.run();
+    expect(result.errors).toEqual([]);
+    expect(result.changes).toBe(0);
+    expect((await store.note("n.md"))?.text).toBe("local edit");
+    // The next sync sees both edits and keeps both versions.
+    const next = await engine.run();
+    expect(next.conflicts.map((c) => c.copyPath)).toEqual([
+      "n (conflicted copy).md",
+    ]);
+    expect(remote.data.get("n.md")?.text).toBe("local edit");
+    expect(remote.data.get("n (conflicted copy).md")?.text).toBe("two");
+  });
+  it("does not delete a note saved after the plan was made", async () => {
+    await store.write("n.md", "one");
+    await engine.run();
+    remote.data.delete("n.md");
+    remote.onSnapshot = async () => {
+      remote.onSnapshot = undefined;
+      await store.write("n.md", "edited");
+    };
+    expect((await engine.run()).errors).toEqual([]);
+    expect((await store.note("n.md"))?.text).toBe("edited");
+    await engine.run();
+    expect(remote.data.get("n.md")?.text).toBe("edited");
+  });
+  it("does not delete a folder that gained a note after the plan was made", async () => {
+    await store.write("f/a.md", "one");
+    await engine.run();
+    await remote.delete(remote.data.get("f")!.entry);
+    remote.onSnapshot = async () => {
+      remote.onSnapshot = undefined;
+      await store.write("f/new.md", "new");
+    };
+    await engine.run();
+    expect((await store.note("f/new.md"))?.text).toBe("new");
+    await engine.run();
+    expect(remote.data.get("f/new.md")?.text).toBe("new");
+  });
+  it("does not merge into a note saved while the drive copy was downloading", async () => {
+    await store.write("n.md", "one\ntwo\n", undefined, 1000);
+    await engine.run();
+    await store.write("n.md", "ONE\ntwo\n", undefined, 2000);
+    await remote.edit("n.md", "one\nTWO\n", 3000);
+    remote.onDownload = async () => {
+      remote.onDownload = undefined;
+      await store.write("n.md", "typed meanwhile\n", undefined, 4000);
+    };
+    await engine.run();
+    expect((await store.note("n.md"))?.text).toBe("typed meanwhile\n");
+    expect(remote.data.get("n.md")?.text).toBe("one\nTWO\n");
+  });
+  it("keeps the record when the drive copy changed before a remote delete", async () => {
+    await store.write("n.md", "one", undefined, 1000);
+    await engine.run();
+    await store.delete("n.md");
+    remote.readManifest = async () => {
+      await remote.edit("n.md", "edited elsewhere", 2000);
+      remote.readManifest = async () => remote.manifest;
+      return remote.manifest;
+    };
+    const result = await engine.run();
+    expect(result.errors).toEqual(["n.md: Revision conflict"]);
+    expect(remote.data.get("n.md")?.text).toBe("edited elsewhere");
+    await engine.run();
+    expect((await store.note("n.md"))?.text).toBe("edited elsewhere");
+  });
+  it("saves the conflicted copy before overwriting the note", async () => {
+    await store.write("n.md", "one", undefined, 1000);
+    await engine.run();
+    await store.write("n.md", "mine", undefined, 2000);
+    await remote.edit("n.md", "theirs", 3000);
+    const write = store.write.bind(store);
+    store.write = (path, ...rest) =>
+      path === "n (conflicted copy).md"
+        ? Promise.reject(new Error("disk full"))
+        : write(path, ...rest);
+    expect((await engine.run()).errors).toEqual(["n.md: disk full"]);
+    expect((await store.note("n.md"))?.text).toBe("mine");
+    store.write = write;
+    const result = await engine.run();
+    expect(result.errors).toEqual([]);
+    expect((await store.note("n.md"))?.text).toBe("theirs");
+    expect((await store.note("n (conflicted copy).md"))?.text).toBe("mine");
+  });
+  it("uploads a conflicted copy on the next sync when its upload fails", async () => {
+    await store.write("n.md", "one", undefined, 1000);
+    await engine.run();
+    await store.write("n.md", "mine", undefined, 2000);
+    await remote.edit("n.md", "theirs", 3000);
+    remote.failing.add("n (conflicted copy).md");
+    const result = await engine.run();
+    expect(result.errors).toEqual(["n.md: Upload failed"]);
+    expect(result.conflicts).toHaveLength(1);
+    expect((await store.note("n.md"))?.text).toBe("theirs");
+    expect((await store.note("n (conflicted copy).md"))?.text).toBe("mine");
+    remote.failing.clear();
+    expect((await engine.run()).errors).toEqual([]);
+    expect(remote.data.get("n (conflicted copy).md")?.text).toBe("mine");
+  });
+  it("keeps a byte order mark and does not rewrite downloaded bytes", async () => {
+    const bytes = new Uint8Array([0xef, 0xbb, 0xbf, 0x68, 0x69]);
+    await remote.upload("n.md", bytes);
+    await engine.run();
+    expect((await store.note("n.md"))?.text).toBe("\ufeffhi");
+    remote.uploads = [];
+    await engine.run();
+    expect(remote.uploads).toEqual([]);
+    await store.write("n.md", "\ufeffhi!");
+    await engine.run();
+    expect(remote.data.get("n.md")?.text).toBe("\ufeffhi!");
+  });
+  it("does not rewrite a note that is not valid UTF-8 until it is edited", async () => {
+    const bytes = new Uint8Array([0x68, 0xff]);
+    await remote.upload("n.md", bytes);
+    await engine.run();
+    expect((await store.note("n.md"))?.text).toBe("h\ufffd");
+    remote.uploads = [];
+    await engine.run();
+    expect(remote.uploads).toEqual([]);
+    expect(remote.data.get("n.md")?.bytes).toEqual(bytes);
+  });
 });
 describe("syncAll", () => {
   it("requeues other drives after downloads", async () => {

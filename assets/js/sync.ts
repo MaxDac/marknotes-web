@@ -26,6 +26,7 @@ import {
   type Account,
   type Note,
   type RecordState,
+  inside,
   parent,
 } from "./storage";
 import { ATTACHMENTS, attachmentHash } from "./attachments";
@@ -44,7 +45,7 @@ export interface Entry {
 export type Content = string | Uint8Array<ArrayBuffer>;
 export interface Remote {
   snapshot(): Promise<Entry[]>;
-  download(entry: Entry): Promise<string>;
+  /** The file's exact bytes: notes are hashed as downloaded and decoded only to be stored as text. */
   downloadBytes(entry: Entry): Promise<Uint8Array<ArrayBuffer>>;
   /** Uploads content, recording `modifiedAt` as the file's modification time. */
   upload(
@@ -86,10 +87,23 @@ export function message(error: unknown): string {
 }
 
 const encoder = new TextEncoder();
+// ignoreBOM keeps a leading byte order mark in the text, so valid UTF-8 round-trips byte for byte.
+const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
 const hashContent = (content: Content): string =>
   sha256Hex(typeof content === "string" ? encoder.encode(content) : content);
+
+/**
+ * Decodes downloaded note bytes for the editor. Valid UTF-8, with or without a byte order mark, round-trips exactly,
+ * so the recorded hash of the text is the hash of the downloaded bytes and the drive copy is not rewritten. Invalid
+ * UTF-8 cannot be stored as text unchanged: it is recorded as stored, so the drive copy is only rewritten once the
+ * note is edited.
+ */
+export const decodeNote = (bytes: Uint8Array<ArrayBuffer>): string =>
+  decoder.decode(bytes);
 /** Set once the local `attachments/` folder exists, like a directory on disk that outlives its files. */
 const ATTACHMENTS_FOLDER = "attachments-folder";
+/** Planned-state marker for local folders. */
+const FOLDER = "folder";
 
 const toCore = (e: Entry): RemoteEntry => ({
   path: e.path,
@@ -111,6 +125,8 @@ export class SyncEngine {
   /** Snapshot entries by path: they carry provider data (such as OneDrive eTags) that the core does not. */
   private entries = new Map<string, Entry>();
   private modified = new Map<string, number>();
+  /** What the plan saw locally: content hashes of notes and attachments, FOLDER for folders. */
+  private planned = new Map<string, string>();
   private known = new Set<string>();
   private result: Outcome = { changes: 0, conflicts: [], errors: [] };
   constructor(
@@ -123,6 +139,8 @@ export class SyncEngine {
   }
   async run(): Promise<Outcome> {
     this.result = { changes: 0, conflicts: [], errors: [] };
+    this.modified.clear();
+    this.planned.clear();
     this.records = new Map(
       ((await this.store.value<RecordState[]>(this.key)) ?? []).map((r) => [
         r.path,
@@ -182,16 +200,19 @@ export class SyncEngine {
     for (const note of await this.store.list()) {
       if (!isSyncedEntry(note.path, note.folder)) continue;
       if (note.folder) {
+        this.planned.set(note.path, FOLDER);
         entries.push({ path: note.path, isFolder: true });
         continue;
       }
       const modified = localTime(note, this.records.get(note.path));
       this.modified.set(note.path, modified);
+      const sha256 = hashContent(note.text);
+      this.planned.set(note.path, sha256);
       entries.push({
         path: note.path,
         isFolder: false,
         modifiedMillis: modified,
-        sha256: hashContent(note.text),
+        sha256,
       });
     }
     const attachments = (await this.store.attachments()).filter((a) =>
@@ -202,14 +223,19 @@ export class SyncEngine {
       await this.store.put(ATTACHMENTS_FOLDER, true);
       folder = true;
     }
-    if (folder) entries.push({ path: ATTACHMENTS, isFolder: true });
+    if (folder) {
+      this.planned.set(ATTACHMENTS, FOLDER);
+      entries.push({ path: ATTACHMENTS, isFolder: true });
+    }
     for (const a of attachments) {
       this.modified.set(a.path, a.modifiedAt);
+      const sha256 = sha256Hex(a.bytes);
+      this.planned.set(a.path, sha256);
       entries.push({
         path: a.path,
         isFolder: false,
         modifiedMillis: a.modifiedAt,
-        sha256: sha256Hex(a.bytes),
+        sha256,
       });
     }
     return entries;
@@ -259,8 +285,8 @@ export class SyncEngine {
         return this.recordFile(action.path, uploaded, content);
       }
       case "download":
-        await this.download(action.path, this.entry(action.remote));
-        this.result.changes++;
+        if (await this.download(action.path, this.entry(action.remote)))
+          this.result.changes++;
         return;
       case "record": {
         await this.upsert(
@@ -277,6 +303,7 @@ export class SyncEngine {
         return;
       }
       case "deleteLocal":
+        if (!(await this.unchanged(action.path))) return;
         if (isAttachmentPath(action.path))
           await this.store.deleteAttachment(action.path);
         else await this.store.delete(action.path);
@@ -287,6 +314,7 @@ export class SyncEngine {
         await this.remote.delete(this.entry(action.remote));
         return this.forget(action.path);
       case "deleteLocalFolder":
+        if (!(await this.unchanged(action.path))) return;
         if (action.path === ATTACHMENTS) {
           for (const path of await this.store.attachmentPaths())
             await this.store.deleteAttachment(path);
@@ -310,7 +338,9 @@ export class SyncEngine {
   ): Promise<void> {
     const entry = this.entry(remoteEntry);
     const local = await this.readText(path);
-    const remote = await this.remote.download(entry);
+    // Edited since planning: left for the next sync, which plans with the new text.
+    if (hashContent(local) !== this.planned.get(path)) return;
+    const remote = decodeNote(await this.remote.downloadBytes(entry));
     const baseText = hasRecord
       ? ((await this.store.base(this.account.id, path)) ?? null)
       : null;
@@ -330,7 +360,7 @@ export class SyncEngine {
         return this.recordFile(path, entry, local);
       case "merged": {
         const now = Date.now();
-        await this.store.write(path, outcome.text, undefined, now);
+        if (!(await this.writeIfUnchanged(path, outcome.text, now))) return;
         await this.recordFile(
           path,
           await this.remote.upload(path, outcome.text, entry, now),
@@ -341,18 +371,9 @@ export class SyncEngine {
       }
       case "newestWins": {
         const localWins = outcome.winner === "local";
-        if (localWins)
-          await this.recordFile(
-            path,
-            await this.remote.upload(path, local, entry, localModified),
-            local,
-          );
-        else {
-          await this.store.write(path, remote, undefined, entry.modifiedAt);
-          await this.recordFile(path, entry, remote);
-        }
         // The copy keeps the modification time of the version that lost.
         const copyTime = localWins ? entry.modifiedAt : localModified;
+        // Save the losing version locally before anything overwrites it, so a failing step never loses it.
         await this.store.write(
           outcome.copyPath,
           outcome.copyText,
@@ -368,6 +389,17 @@ export class SyncEngine {
           driveId: this.account.id,
         });
         this.result.changes++;
+        if (localWins)
+          await this.recordFile(
+            path,
+            await this.remote.upload(path, local, entry, localModified),
+            local,
+          );
+        else {
+          if (!(await this.writeIfUnchanged(path, remote, entry.modifiedAt)))
+            throw new Error("changed while syncing; will sync again");
+          await this.recordFile(path, entry, remote);
+        }
         await this.recordFile(
           outcome.copyPath,
           await this.remote.upload(
@@ -382,6 +414,50 @@ export class SyncEngine {
       }
     }
   }
+  /** What is stored locally at `path` now, in the form of `planned`. */
+  private async current(path: string): Promise<string | undefined> {
+    if (path === ATTACHMENTS)
+      return (await this.store.value<boolean>(ATTACHMENTS_FOLDER))
+        ? FOLDER
+        : undefined;
+    if (isAttachmentPath(path)) {
+      const file = await this.store.attachment(path);
+      return file && sha256Hex(file.bytes);
+    }
+    const note = await this.store.note(path);
+    if (!note) return undefined;
+    return note.folder ? FOLDER : hashContent(note.text);
+  }
+  /**
+   * True when `path`, and everything inside it for a folder, is still what the plan saw. Local writes and deletes
+   * check this first and otherwise skip the step, leaving it for the next sync.
+   */
+  private async unchanged(path: string): Promise<boolean> {
+    const planned = this.planned.get(path);
+    if ((await this.current(path)) !== planned) return false;
+    if (planned !== FOLDER) return true;
+    const children =
+      path === ATTACHMENTS
+        ? await this.store.attachmentPaths()
+        : (await this.store.list())
+            .map((n) => n.path)
+            .filter((p) => inside(path, p));
+    for (const child of children)
+      if ((await this.current(child)) !== this.planned.get(child)) return false;
+    return true;
+  }
+  /** Writes a note unless it changed since planning; the revision check makes the comparison and write atomic. */
+  private async writeIfUnchanged(
+    path: string,
+    text: string,
+    modifiedAt?: number,
+  ): Promise<boolean> {
+    const note = await this.store.note(path);
+    const now = note && (note.folder ? FOLDER : hashContent(note.text));
+    if (now !== this.planned.get(path)) return false;
+    await this.store.write(path, text, note?.revision, modifiedAt);
+    return true;
+  }
   private async read(path: string): Promise<Content> {
     if (!isAttachmentPath(path)) return this.readText(path);
     const file = await this.store.attachment(path);
@@ -394,18 +470,23 @@ export class SyncEngine {
       throw new Error("no longer exists in this browser");
     return note.text;
   }
-  private async download(path: string, entry: Entry): Promise<void> {
+  /** Downloads `path` unless it changed locally since planning; true when it was written. */
+  private async download(path: string, entry: Entry): Promise<boolean> {
+    const bytes = await this.remote.downloadBytes(entry);
     if (isAttachmentPath(path)) {
-      const bytes = await this.remote.downloadBytes(entry);
       if (sha256Hex(bytes) !== attachmentHash(path))
         throw new Error("content does not match its name; skipped");
+      if (!(await this.unchanged(path))) return false;
       await this.store.putAttachment(path, bytes, entry.modifiedAt);
       await this.store.put(ATTACHMENTS_FOLDER, true);
-      return this.recordFile(path, entry, bytes);
+      await this.recordFile(path, entry, bytes);
+      return true;
     }
-    const text = await this.remote.download(entry);
-    await this.store.write(path, text, undefined, entry.modifiedAt);
-    return this.recordFile(path, entry, text);
+    const text = decodeNote(bytes);
+    if (!(await this.writeIfUnchanged(path, text, entry.modifiedAt)))
+      return false;
+    await this.recordFile(path, entry, text);
+    return true;
   }
   private async createLocalFolder(path: string): Promise<void> {
     if (path === ATTACHMENTS) await this.store.put(ATTACHMENTS_FOLDER, true);
