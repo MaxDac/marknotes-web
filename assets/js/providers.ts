@@ -153,9 +153,6 @@ export class Dropbox implements Drive {
       (e) => !e.path.split("/").some((p) => p.startsWith(".")),
     );
   }
-  async download(entry: Entry): Promise<string> {
-    return (await this.fetchPath(entry.id)).text();
-  }
   async downloadBytes(entry: Entry): Promise<Uint8Array<ArrayBuffer>> {
     return new Uint8Array(await (await this.fetchPath(entry.id)).arrayBuffer());
   }
@@ -232,9 +229,17 @@ export class Dropbox implements Drive {
     if (!result) throw new Error("Missing folder path.");
     return this.remember(result);
   }
+  /** File deletes are conditional on the snapshot revision; a newer revision fails with 409 and keeps the file. */
   async delete(entry: Entry): Promise<void> {
+    if (!entry.folder && !entry.version)
+      throw new Error(
+        "Dropbox omitted the revision guard; sync again before deleting.",
+      );
     try {
-      await this.api("delete_v2", { path: entry.id });
+      await this.api("delete_v2", {
+        path: entry.id,
+        ...(entry.folder ? {} : { parent_rev: entry.version }),
+      });
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 404) throw error;
     }
@@ -421,9 +426,6 @@ export class OneDrive implements Drive {
     this.delta = delta;
     return this.entries();
   }
-  async download(entry: Entry): Promise<string> {
-    return (await this.fetchContent(entry)).text();
-  }
   async downloadBytes(entry: Entry): Promise<Uint8Array<ArrayBuffer>> {
     return new Uint8Array(await (await this.fetchContent(entry)).arrayBuffer());
   }
@@ -508,7 +510,12 @@ export class OneDrive implements Drive {
     if (!result) throw new Error("Missing folder path.");
     return result;
   }
+  /** Deletes are conditional on the snapshot eTag; a newer revision fails with 412 and keeps the item. */
   async delete(entry: Entry): Promise<void> {
+    if (!entry.folder && !entry.tag)
+      throw new Error(
+        "OneDrive omitted the revision guard; sync again before deleting.",
+      );
     try {
       await this.api(`/me/drive/items/${encodeURIComponent(entry.id)}`, {
         method: "DELETE",
@@ -525,12 +532,14 @@ export class OneDrive implements Drive {
       const node = await this.api<GraphItem>(
         `/me/drive/items/${encodeURIComponent(root)}:/.marknotes/manifest.json`,
       );
-      return this.download({
-        path: ".marknotes/manifest.json",
-        id: node.id,
-        folder: false,
-        version: "",
-      });
+      return await (
+        await this.fetchContent({
+          path: ".marknotes/manifest.json",
+          id: node.id,
+          folder: false,
+          version: "",
+        })
+      ).text();
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) return null;
       throw error;

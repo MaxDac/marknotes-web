@@ -25,6 +25,7 @@ import {
 import {
   filterRefs,
   idsToAssign,
+  joinFrontMatter,
   linkedId,
   noteId,
   noteLink,
@@ -70,6 +71,9 @@ const mappings: Record<string, Mapping> = {
   },
   "front-matter/read-id": ({ text }) => ({ id: noteId(text) ?? null }),
   "front-matter/with-id": ({ text, id }) => ({ text: withId(text, id) }),
+  "front-matter/with-body": ({ frontMatter, body }) => ({
+    text: joinFrontMatter(frontMatter, body),
+  }),
   "front-matter/split": ({ text }) => {
     const { header, body } = splitFrontMatter(text);
     return { frontMatter: header, body };

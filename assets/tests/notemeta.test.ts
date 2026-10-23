@@ -66,6 +66,20 @@ describe("front-matter", () => {
     );
     expect(withBody("legacy", "new")).toBe("new");
   });
+  it("inserts a line break after a header that ends the file", () => {
+    expect(withBody("---\nid: abcd1234\n---", "Hello")).toBe(
+      "---\nid: abcd1234\n---\nHello",
+    );
+    expect(withBody("---\r\nid: abcd1234\r\n---", "Hi\r\n")).toBe(
+      "---\r\nid: abcd1234\r\n---\r\nHi\r\n",
+    );
+    expect(withBody("---\nid: abcd1234\n---", "")).toBe(
+      "---\nid: abcd1234\n---",
+    );
+    expect(noteId(withBody("---\nid: abcd1234\n---", "Hello"))).toBe(
+      "abcd1234",
+    );
+  });
 });
 
 describe("note references", () => {

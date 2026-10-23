@@ -36,9 +36,19 @@ export const noteBody = (text: string): string => splitFrontMatter(text).body;
 export const noteId = (text: string): string | undefined =>
   splitFrontMatter(text).id;
 
+/**
+ * Re-attaches a front-matter header to a body. A header that does not end with a line break (`---` at the end of
+ * the file) gets one before a non-empty body: CRLF when its opening fence ends with CRLF, LF otherwise.
+ */
+export function joinFrontMatter(header: string, body: string): string {
+  if (!header || !body || header.endsWith("\n")) return header + body;
+  const newline = FENCE.exec(header)?.[1] ?? "\n";
+  return header + newline + body;
+}
+
 /** Replaces the body of `text`, keeping its front-matter header verbatim. */
 export function withBody(text: string, body: string): string {
-  return splitFrontMatter(text).header + body;
+  return joinFrontMatter(splitFrontMatter(text).header, body);
 }
 
 /** Sets the note id, preserving every other front-matter key verbatim. */

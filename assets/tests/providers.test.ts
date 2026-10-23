@@ -103,6 +103,57 @@ describe("Dropbox store", () => {
       "500",
     );
   });
+  it("deletes files only at the snapshot revision", async () => {
+    const args: unknown[] = [];
+    mock((url, init) => {
+      const arg = JSON.parse(String(init.body)) as { path: string };
+      args.push(arg);
+      if (arg.path === "id:changed")
+        return json({ error_summary: "path_write/conflict/file/.." }, 409);
+      if (arg.path === "id:gone")
+        return json({ error_summary: "path_lookup/not_found/.." }, 409);
+      expect(url).toMatch(/delete_v2$/);
+      return json({ metadata: {} });
+    });
+    const remote = new Dropbox(auth, dbAccount);
+    const file = { path: "N.md", id: "id:file", folder: false, version: "r1" };
+    await remote.delete(file);
+    await remote.delete({ path: "F", id: "id:dir", folder: true, version: "" });
+    await remote.delete({ ...file, id: "id:gone" });
+    expect(args.slice(0, 2)).toEqual([
+      { path: "id:file", parent_rev: "r1" },
+      { path: "id:dir" },
+    ]);
+    await expect(remote.delete({ ...file, id: "id:changed" })).rejects.toThrow(
+      "409",
+    );
+    await expect(remote.delete({ ...file, version: "" })).rejects.toThrow(
+      "revision guard",
+    );
+  });
+  it("reads the server time when the client time is missing", async () => {
+    mock((url) => {
+      if (url.endsWith("create_folder_v2"))
+        return json({
+          metadata: { ".tag": "folder", path_lower: "/marknotes", id: "f" },
+        });
+      return json({
+        entries: [
+          {
+            ".tag": "file",
+            path_lower: "/marknotes/n.md",
+            id: "id:n",
+            rev: "r1",
+            server_modified: "2024-01-03T00:00:00Z",
+          },
+        ],
+        cursor: "c",
+        has_more: false,
+      });
+    });
+    const [entry] = await new Dropbox(auth, dbAccount).snapshot();
+    expect(entry?.modifiedAt).toBe(Date.parse("2024-01-03T00:00:00Z"));
+  });
 });
 describe("OneDrive store", () => {
   it("handles delta parent ordering, case, cTag and guarded updates", async () => {
@@ -180,6 +231,20 @@ describe("OneDrive store", () => {
     await remote.snapshot();
     expect(calls.at(-1)?.url).toContain("/checkpoint");
   });
+  it("deletes only at the snapshot eTag and keeps a changed item", async () => {
+    mock((_url, init) => {
+      const tag = new Headers(init.headers).get("If-Match");
+      return tag === "e1"
+        ? new Response(null, { status: 204 })
+        : json({ error: { code: "notAllowed" } }, 412);
+    });
+    const remote = new OneDrive(auth, msAccount);
+    const file = { path: "N.md", id: "n", folder: false, version: "c1" };
+    await remote.delete({ ...file, tag: "e1" });
+    expect(calls[0]?.init.method).toBe("DELETE");
+    await expect(remote.delete({ ...file, tag: "e0" })).rejects.toThrow("412");
+    await expect(remote.delete(file)).rejects.toThrow("revision guard");
+  });
   it("never forwards Graph bearer tokens to preauthenticated download URLs", async () => {
     mock((url, init) => {
       if (url.includes("graph.microsoft.com"))
@@ -191,14 +256,13 @@ describe("OneDrive store", () => {
       expect(new Headers(init.headers).has("Authorization")).toBe(false);
       return new Response("private note");
     });
-    expect(
-      await new OneDrive(auth, msAccount).download({
-        id: "note",
-        path: "N.md",
-        folder: false,
-        version: "",
-      }),
-    ).toBe("private note");
+    const bytes = await new OneDrive(auth, msAccount).downloadBytes({
+      id: "note",
+      path: "N.md",
+      folder: false,
+      version: "",
+    });
+    expect(new TextDecoder().decode(bytes)).toBe("private note");
   });
   it("rejects a continuation URL outside Microsoft Graph", async () => {
     mock((url) =>

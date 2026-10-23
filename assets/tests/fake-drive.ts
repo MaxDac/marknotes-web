@@ -11,14 +11,17 @@ export class FakeDrive implements Remote {
   fail = false;
   /** Paths whose upload fails. */
   failing = new Set<string>();
+  /** Runs after the engine listed the local tree, before it plans: simulates an edit racing the sync. */
+  onSnapshot?: () => Promise<void>;
+  /** Runs before a download returns: simulates an edit racing the apply step. */
+  onDownload?: (path: string) => Promise<void>;
   async snapshot(): Promise<Entry[]> {
     if (this.fail) throw new Error("Unavailable");
+    await this.onSnapshot?.();
     return [...this.data.values()].map((n) => ({ ...n.entry }));
   }
-  async download(entry: Entry): Promise<string> {
-    return this.data.get(entry.path)!.text;
-  }
   async downloadBytes(entry: Entry): Promise<Uint8Array<ArrayBuffer>> {
+    await this.onDownload?.(entry.path);
     const item = this.data.get(entry.path)!;
     return item.bytes ?? new TextEncoder().encode(item.text);
   }
@@ -55,7 +58,11 @@ export class FakeDrive implements Remote {
     this.data.set(path, { entry, text: "" });
     return entry;
   }
+  /** Like the real drives, file deletes are conditional on the snapshot revision. */
   async delete(entry: Entry): Promise<void> {
+    const current = this.data.get(entry.path);
+    if (current && !entry.folder && current.entry.version !== entry.version)
+      throw new Error("Revision conflict");
     for (const path of this.data.keys())
       if (path === entry.path || path.startsWith(`${entry.path}/`))
         this.data.delete(path);

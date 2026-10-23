@@ -75,9 +75,14 @@ by SHA-256. A note changed in more than one place (this browser, Dropbox, OneDri
 Android/desktop apps writing to the same folder) is first three-way merged against the last synced version (kept per
 drive in this browser). If the edits overlap, **newest wins**: the version with the latest edit time is kept
 everywhere, and the other is saved as a ` (conflicted copy).md` sibling (` (conflicted copy) 2.md`, … if taken) with a
-new note id, and uploaded, so no edit is lost. Local edit times are recorded per note; drive times come from Dropbox
-`client_modified` and OneDrive `fileSystemInfo.lastModifiedDateTime`, which the web app sets on upload. Equal times
-prefer the drive's version. Results depend on device clocks being roughly correct. Edits survive opposing deletions.
+new note id, and uploaded, so no edit is lost. The copy is saved in this browser before the note is overwritten, then
+uploaded. Local edit times are recorded per note; drive times come from Dropbox
+`client_modified` and OneDrive `fileSystemInfo.lastModifiedDateTime` (falling back to the server time), which the web
+app sets on upload. Equal times prefer the drive's version. Results depend on device clocks being roughly correct. Edits
+survive opposing deletions: a note saved after the sync was planned is never overwritten or deleted locally (the step
+waits for the next sync), and drive deletions are conditional on the revision the sync saw (Dropbox `parent_rev`,
+OneDrive `If-Match`), so a file changed elsewhere meanwhile is kept and downloaded next time. Notes are downloaded and
+hashed as bytes, so a UTF-8 byte order mark is kept and an unedited note is never rewritten on the drive.
 Three reconciliation passes per drive bound a multi-drive run; a failing step is reported and the rest of the sync goes on.
 Images in `attachments/` sync as immutable binary files named by their SHA-256 (`attachments/<sha256>.<png|jpg|gif|webp>`;
 other files there are not synced): they are uploaded, downloaded or deleted, never merged. The core is WebAssembly, so
