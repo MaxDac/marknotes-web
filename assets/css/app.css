@@ -758,6 +758,52 @@ a {
   flex-direction: column;
   gap: 8px;
 }
+.setting-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.local {
+  flex-wrap: wrap;
+}
+.unlock {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 32px 16px;
+}
+.unlock-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: min(400px, 100%);
+  padding: 32px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+.unlock-card h1 {
+  font-size: 20px;
+}
+.unlock-card p {
+  color: var(--weak);
+}
+.unlock-card .field-error {
+  margin: 0;
+}
+.unlock-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
 .segmented {
   display: inline-flex;
   padding: 3px;
@@ -1467,4 +1513,71 @@ a {
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
+}
+
+/* Security information page (server-rendered, script-free) */
+@media (prefers-color-scheme: dark) {
+  .doc-page {
+    color-scheme: dark;
+    --bg: #1b1a22;
+    --panel: #23212c;
+    --fg: #f1eff7;
+    --weak: #a7a4b5;
+    --hint: #7e7b8c;
+    --line: #34323e;
+  }
+}
+.doc {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 48px 24px 64px;
+  font-size: 15px;
+  line-height: 1.6;
+}
+.doc-header {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 32px;
+}
+.doc h1 {
+  font-size: 28px;
+  line-height: 1.2;
+  margin-bottom: 8px;
+}
+.doc h2 {
+  font-size: 19px;
+  margin: 32px 0 12px;
+}
+.doc p,
+.doc ul,
+.doc dl {
+  margin: 0 0 12px;
+}
+.doc-lead,
+.doc li,
+.doc dd,
+.doc p {
+  color: var(--weak);
+}
+.doc li {
+  margin-bottom: 6px;
+}
+.doc-modes dt {
+  margin-top: 16px;
+  color: var(--fg);
+  font-weight: 600;
+}
+.doc-modes dd {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  border-left: 3px solid var(--line);
+}
+.doc code {
+  font-size: 0.92em;
+}
+.doc-footer {
+  margin-top: 40px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
 }

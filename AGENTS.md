@@ -46,14 +46,19 @@ above the function, or a documented entry in `.sobelow-conf` for whole-app check
 
 | Runs where | What | Code |
 | --- | --- | --- |
-| Server (Phoenix) | Serves the LiveView shell, static assets, `/health`, and minimal OAuth callback pages (`/oauth/:provider`). Holds **no** note data, tokens or paths. | `lib/marknotes_web/` (`router.ex`, `live/notes_live.ex`, `controllers/page_controller.ex`, `privacy_headers.ex` = CSP) |
+| Server (Phoenix) | Serves the LiveView shell, static assets, `/health`, the static `/security` page, and minimal OAuth callback pages (`/oauth/:provider`). Holds **no** note data, tokens or paths. | `lib/marknotes_web/` (`router.ex`, `live/notes_live.ex`, `controllers/page_controller.ex`, `privacy_headers.ex` = CSP) |
 | Server config | Public Dropbox/OneDrive app IDs (`DROPBOX_APP_KEY`, `MSAL_CLIENT_ID`) injected at runtime | `config/runtime.exs` |
 | Browser | Everything else: storage, editor, preview, sync, provider APIs, OAuth | `assets/js/` |
 
 Browser modules (`assets/js/`):
 
-- `storage.ts` — IndexedDB `Store` (notes tree, per-drive sync records and base copies) and encrypted credential
-  `Vault`; path validation.
+- `storage.ts` — `Store` (notes tree, per-drive sync records and base copies) and encrypted credential `Vault`;
+  path validation.
+- `backend.ts` — storage backends behind `Store`: IndexedDB (schema, `sealed`/`meta` stores) and an in-memory
+  backend for locked/memory-only modes.
+- `security.ts` — storage modes (plain / passphrase-locked / memory only), PBKDF2 + AES-GCM sealing of the
+  working set, mode switching, single-tab Web Lock, forget device. Threat model: `docs/security.md`, kept in sync
+  with the server-rendered `/security` page (`lib/marknotes_web/controllers/page_html/security.html.heex`).
 - `sync.ts` — **sync executor**: the algorithm (plan, three-way merge, newest-wins reconciliation with
   ` (conflicted copy).md` siblings, manifest `.marknotes/manifest.json` `format: 1`, multi-drive scheduling) comes from
   the shared core [marknotes-sync](https://github.com/MaxDac/marknotes-sync) (`@marknotes/sync`, Rust → WebAssembly,
@@ -83,7 +88,8 @@ only points there). `assets/parity/fixtures.test.ts` runs every `spec/fixtures` 
 - Elixir: `mix format`, Credo strict, no compile warnings, Dialyzer clean. TypeScript: strict `tsc`, ESLint, Prettier.
 - Privacy invariants (never break): note content, paths, tokens and editing events never reach Phoenix or server
   sessions; cloud calls go directly from the browser to the provider; the preview never loads remote images or raw HTML.
-- Keep the CSP in `privacy_headers.ex` tight; adding an origin needs a reason in the PR.
+- Keep the CSP in `privacy_headers.ex` tight; adding an origin needs a reason in the PR (and, for OneDrive download
+  hosts, the matching list in `providers.ts`). Update `docs/security.md` and `/security` when protections change.
 - Sync changes need vitest coverage against the fake drive; UI flows touching providers need Playwright fixtures.
 - Proton Drive is out of scope until [#1](https://github.com/MaxDac/marknotes-web/issues/1) is resolved; do not add a
   Proton login or proxy. If you work on it, follow the README "Proton follow-up requirements".

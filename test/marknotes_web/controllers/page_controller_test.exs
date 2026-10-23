@@ -22,6 +22,35 @@ defmodule MarknotesWeb.PageControllerTest do
     refute csp =~ "'unsafe-eval'"
   end
 
+  test "CSP limits connections to this origin and the sync providers", %{conn: conn} do
+    [csp] = conn |> get("/") |> get_resp_header("content-security-policy")
+    [_, connect] = Regex.run(~r/connect-src ([^;]*);/, csp)
+    sources = String.split(connect)
+    assert "'self'" in sources
+    %URI{host: host, port: port} = MarknotesWeb.Endpoint.struct_url()
+    assert "ws://#{host}:#{port}" in sources
+    assert "https://api.dropboxapi.com" in sources
+    assert "https://graph.microsoft.com" in sources
+    refute "https:" in sources
+    refute "ws:" in sources
+    refute "wss:" in sources
+    refute Enum.any?(sources, &(&1 =~ ~r{^https://\*\.?$}))
+  end
+
+  test "security page explains protections without scripts or user data", %{conn: conn} do
+    conn = get(conn, "/security")
+    html = html_response(conn, 200)
+    assert html =~ "How MarkNotes protects your notes"
+    assert html =~ "Encrypted with a passphrase"
+    assert html =~ "Memory only"
+    assert html =~ "Forget this device"
+    assert html =~ "What this does not protect against"
+    refute html =~ "<script"
+    refute html =~ "csrf"
+    assert [_] = get_resp_header(conn, "content-security-policy")
+    assert get_resp_header(conn, "cache-control") == ["no-store"]
+  end
+
   test "links and serves the shared MarkNotes icons", %{conn: conn} do
     html = conn |> get("/") |> html_response(200)
     assert html =~ ~s(href="/favicon.svg")
