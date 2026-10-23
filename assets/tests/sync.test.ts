@@ -128,8 +128,12 @@ describe("sync engine", () => {
     expect(local?.text).toBe("theirs");
     expect(local?.modifiedAt).toBe(3000);
     expect(remote.data.get("n.md")?.text).toBe("theirs");
-    expect((await store.note("n (conflicted copy).md"))?.text).toBe("mine");
-    expect(remote.data.get("n (conflicted copy).md")?.text).toBe("mine");
+    expect(noteBody((await store.note("n (conflicted copy).md"))!.text)).toBe(
+      "mine",
+    );
+    expect(noteBody(remote.data.get("n (conflicted copy).md")!.text)).toBe(
+      "mine",
+    );
     expect(remote.data.get("n (conflicted copy).md")?.entry.modifiedAt).toBe(
       2000,
     );
@@ -149,8 +153,12 @@ describe("sync engine", () => {
     expect(remote.data.get("n.md")?.text).toBe("mine");
     expect(remote.data.get("n.md")?.entry.modifiedAt).toBe(3000);
     expect((await store.note("n.md"))?.text).toBe("mine");
-    expect((await store.note("n (conflicted copy).md"))?.text).toBe("theirs");
-    expect(remote.data.get("n (conflicted copy).md")?.text).toBe("theirs");
+    expect(noteBody((await store.note("n (conflicted copy).md"))!.text)).toBe(
+      "theirs",
+    );
+    expect(noteBody(remote.data.get("n (conflicted copy).md")!.text)).toBe(
+      "theirs",
+    );
   });
   it("reconciles differing initial versions by modification time, without a base", async () => {
     await store.write("n.md", "mine", undefined, 1000);
@@ -159,7 +167,9 @@ describe("sync engine", () => {
     expect(conflicts).toHaveLength(1);
     expect(conflicts[0]?.baseText).toBeNull();
     expect((await store.note("n.md"))?.text).toBe("theirs");
-    expect((await store.note("n (conflicted copy).md"))?.text).toBe("mine");
+    expect(noteBody((await store.note("n (conflicted copy).md"))!.text)).toBe(
+      "mine",
+    );
   });
   it("gives a tie to the drive", async () => {
     await store.write("n.md", "mine", undefined, 2000);
@@ -167,7 +177,9 @@ describe("sync engine", () => {
     await engine.run();
     expect(remote.data.get("n.md")?.text).toBe("theirs");
     expect((await store.note("n.md"))?.text).toBe("theirs");
-    expect((await store.note("n (conflicted copy).md"))?.text).toBe("mine");
+    expect(noteBody((await store.note("n (conflicted copy).md"))!.text)).toBe(
+      "mine",
+    );
   });
   it("gives conflicted copies a new id so links keep targeting the original", async () => {
     await store.write("n.md", "---\nid: k7f3q2xa\n---\nmine", undefined, 1000);
@@ -179,11 +191,14 @@ describe("sync engine", () => {
     expect(remote.data.get("n (conflicted copy).md")?.text).toBe(copy);
     expect((await store.note("n.md"))?.text).toContain("k7f3q2xa");
   });
-  it("does not add an id to a copy of a note without one", async () => {
+  it("gives a new id to a copy of a note without one", async () => {
     await store.write("n.md", "mine", undefined, 1000);
     await remote.edit("n.md", "theirs", 2000);
     await engine.run();
-    expect((await store.note("n (conflicted copy).md"))?.text).toBe("mine");
+    const copy = (await store.note("n (conflicted copy).md"))!.text;
+    expect(copy).toMatch(/^---\nid: [0-9a-z]{8}\n---\nmine$/);
+    expect(remote.data.get("n (conflicted copy).md")?.text).toBe(copy);
+    expect((await store.note("n.md"))?.text).toBe("theirs");
   });
   it("syncs chord sequences as ordinary notes and keeps their type on conflicted copies", async () => {
     const head = "---\nid: c4d12345\ntype: chords\n---\n";
@@ -215,7 +230,9 @@ describe("sync engine", () => {
     await store.write("n (conflicted copy).MD", "existing", undefined, 1000);
     await remote.edit("n.MD", "theirs", 2000);
     await engine.run();
-    expect((await store.note("n (conflicted copy) 2.MD"))?.text).toBe("mine");
+    expect(noteBody((await store.note("n (conflicted copy) 2.MD"))!.text)).toBe(
+      "mine",
+    );
     expect((await store.note("n (conflicted copy).MD"))?.text).toBe("existing");
     expect((await store.note("n.MD"))?.text).toBe("theirs");
   });
@@ -291,7 +308,9 @@ describe("sync engine", () => {
       "n (conflicted copy).md",
     ]);
     expect(remote.data.get("n.md")?.text).toBe("local edit");
-    expect(remote.data.get("n (conflicted copy).md")?.text).toBe("two");
+    expect(noteBody(remote.data.get("n (conflicted copy).md")!.text)).toBe(
+      "two",
+    );
   });
   it("does not delete a note saved after the plan was made", async () => {
     await store.write("n.md", "one");
@@ -363,7 +382,9 @@ describe("sync engine", () => {
     const result = await engine.run();
     expect(result.errors).toEqual([]);
     expect((await store.note("n.md"))?.text).toBe("theirs");
-    expect((await store.note("n (conflicted copy).md"))?.text).toBe("mine");
+    expect(noteBody((await store.note("n (conflicted copy).md"))!.text)).toBe(
+      "mine",
+    );
   });
   it("uploads a conflicted copy on the next sync when its upload fails", async () => {
     await store.write("n.md", "one", undefined, 1000);
@@ -375,10 +396,14 @@ describe("sync engine", () => {
     expect(result.errors).toEqual(["n.md: Upload failed"]);
     expect(result.conflicts).toHaveLength(1);
     expect((await store.note("n.md"))?.text).toBe("theirs");
-    expect((await store.note("n (conflicted copy).md"))?.text).toBe("mine");
+    expect(noteBody((await store.note("n (conflicted copy).md"))!.text)).toBe(
+      "mine",
+    );
     remote.failing.clear();
     expect((await engine.run()).errors).toEqual([]);
-    expect(remote.data.get("n (conflicted copy).md")?.text).toBe("mine");
+    expect(noteBody(remote.data.get("n (conflicted copy).md")!.text)).toBe(
+      "mine",
+    );
   });
   it("keeps a byte order mark and does not rewrite downloaded bytes", async () => {
     const bytes = new Uint8Array([0xef, 0xbb, 0xbf, 0x68, 0x69]);
@@ -448,13 +473,17 @@ describe("syncAll", () => {
           : ["from second", "from first"];
       for (const drive of [remote, other]) {
         expect(drive.data.get("n.md")?.text).toBe(winner);
-        expect(drive.data.get("n (conflicted copy).md")?.text).toBe(loser);
+        expect(noteBody(drive.data.get("n (conflicted copy).md")!.text)).toBe(
+          loser,
+        );
       }
       expect((await store.note("n.md"))?.text).toBe(winner);
       expect((await store.note("n.md"))?.modifiedAt).toBe(
         Math.max(first, last),
       );
-      expect((await store.note("n (conflicted copy).md"))?.text).toBe(loser);
+      expect(noteBody((await store.note("n (conflicted copy).md"))!.text)).toBe(
+        loser,
+      );
       const conflicts = [...results.values()].flatMap((r) => r.conflicts);
       expect(conflicts.map((c) => c.copyPath)).toEqual([
         "n (conflicted copy).md",
