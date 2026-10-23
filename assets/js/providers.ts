@@ -85,7 +85,7 @@ export class Dropbox implements Drive {
       if (!(error instanceof ApiError) || error.status !== 409) throw error;
       const item = await this.api<DropboxItem>("get_metadata", { path });
       if (item[".tag"] !== "folder")
-        throw new Error("A file blocks the cloud folder.");
+        throw new Error("A file blocks the cloud folder.", { cause: error });
       return item;
     }
   }
@@ -340,7 +340,8 @@ export class OneDrive implements Drive {
       const item = await this.api<GraphItem>(
         `/me/drive/items/${encodeURIComponent(parentId)}:/${encodeURIComponent(name)}`,
       );
-      if (!item.folder) throw new Error("A file blocks the cloud folder.");
+      if (!item.folder)
+        throw new Error("A file blocks the cloud folder.", { cause: error });
       return item;
     }
   }
