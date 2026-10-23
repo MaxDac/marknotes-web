@@ -231,6 +231,66 @@ describe("OneDrive store", () => {
     await remote.snapshot();
     expect(calls.at(-1)?.url).toContain("/checkpoint");
   });
+  describe("keeps no delta checkpoint after a failed full listing", () => {
+    const file = (id: string) => ({
+      id,
+      name: `${id}.md`,
+      cTag: id,
+      parentReference: { id: "sync" },
+    });
+    function drive(fail: () => boolean, expired = false) {
+      mock((url) => {
+        if (url.endsWith("/me/drive/root")) return json({ id: "drive" });
+        if (url.endsWith("drive:/MarkNotes"))
+          return json({ id: "sync", folder: {} });
+        if (url.endsWith("/root/delta"))
+          return json({
+            value: [file("a")],
+            "@odata.nextLink": "https://graph.microsoft.com/v1.0/page2",
+          });
+        if (url.endsWith("/page2"))
+          return fail()
+            ? json({ error: { code: "generalException" } }, 500)
+            : json({
+                value: [file("b")],
+                "@odata.deltaLink":
+                  "https://graph.microsoft.com/v1.0/checkpoint",
+              });
+        if (url.endsWith("/checkpoint"))
+          return expired
+            ? json({ error: { code: "resyncRequired" } }, 410)
+            : json({ value: [] });
+        throw new Error(`Unexpected ${url}`);
+      });
+    }
+    const deltaCalls = () =>
+      calls
+        .map((c) => c.url)
+        .filter((u) => /\/(root\/delta|page2|checkpoint)$/.test(u));
+    it("lists everything again after a page fails mid-traversal", async () => {
+      let failures = 1;
+      drive(() => failures-- > 0);
+      const remote = new OneDrive(auth, msAccount);
+      await expect(remote.snapshot()).rejects.toThrow("500");
+      calls = [];
+      const entries = await remote.snapshot();
+      expect(deltaCalls()[0]).toMatch(/\/me\/drive\/root\/delta$/);
+      expect(deltaCalls().some((u) => u.endsWith("/checkpoint"))).toBe(false);
+      expect(entries.map((e) => e.path).sort()).toEqual(["a.md", "b.md"]);
+    });
+    it("lists everything again after a failed resync", async () => {
+      let failures = 0;
+      drive(() => failures-- > 0, true);
+      const remote = new OneDrive(auth, msAccount);
+      await remote.snapshot();
+      failures = 1;
+      await expect(remote.snapshot()).rejects.toThrow("500");
+      calls = [];
+      const entries = await remote.snapshot();
+      expect(deltaCalls()[0]).toMatch(/\/me\/drive\/root\/delta$/);
+      expect(entries.map((e) => e.path).sort()).toEqual(["a.md", "b.md"]);
+    });
+  });
   it("deletes only at the snapshot eTag and keeps a changed item", async () => {
     mock((_url, init) => {
       const tag = new Headers(init.headers).get("If-Match");

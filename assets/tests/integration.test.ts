@@ -7,6 +7,7 @@ import { mergeText, parseManifest } from "@marknotes/sync";
 import { Store, type Account } from "../js/storage";
 import { syncAll } from "../js/sync";
 import { attachmentPath } from "../js/attachments";
+import { noteBody, noteId } from "../js/notemeta";
 import {
   addConflicts,
   applyMerge,
@@ -95,7 +96,7 @@ describe("full sync through the shared core", () => {
       ["todo (conflicted copy).md", "local"],
     ]);
     expect(drive.data.get("todo.md")?.text).toBe("milk\nbread\n");
-    expect(drive.data.get("todo (conflicted copy).md")?.text).toBe(
+    expect(noteBody(drive.data.get("todo (conflicted copy).md")!.text)).toBe(
       "milk\neggs\n",
     );
     await sync(laptop);
@@ -103,11 +104,15 @@ describe("full sync through the shared core", () => {
 
     // The phone merges the copy back; the copy disappears everywhere.
     const [conflict] = await pendingConflicts(phone);
+    const copyId = noteId((await phone.note(conflict!.copyPath))!.text);
     const merge = (await loadMerge(phone, conflict!))!;
     await applyMerge(phone, conflict!, mergeText(merge.chunks, { 0: "both" }));
     await sync(phone);
     await sync(laptop);
-    expect((await laptop.note("todo.md"))?.text).toBe("milk\nbread\neggs\n");
+    // The note had no id, so it keeps the one the copy was given.
+    const merged = (await laptop.note("todo.md"))!.text;
+    expect(noteBody(merged)).toBe("milk\nbread\neggs\n");
+    expect(noteId(merged)).toBe(copyId);
     expect(await laptop.note("todo (conflicted copy).md")).toBeUndefined();
     expect(drive.data.has("todo (conflicted copy).md")).toBe(false);
 
