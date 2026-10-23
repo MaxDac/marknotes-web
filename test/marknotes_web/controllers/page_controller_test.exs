@@ -46,6 +46,17 @@ defmodule MarknotesWeb.PageControllerTest do
     end
   end
 
+  # In prod `~p` digests paths (`/favicon-<hash>.svg`), but Plug.Static's `only:` list matches root files by exact
+  # name, so digested root files 404. Only directories in static_paths may be linked through `~p`.
+  test "root layout links only static directories through digested ~p paths" do
+    source = File.read!("lib/marknotes_web/components/layouts/root.html.heex")
+    dirs = Enum.reject(MarknotesWeb.static_paths(), &String.contains?(&1, "."))
+
+    for [segment] <- Regex.scan(~r{~p"/([^/"?]+)}, source, capture: :all_but_first) do
+      assert segment in dirs, "~p\"/#{segment}\" is a root file; link it with a plain href"
+    end
+  end
+
   test "health is database-free and reports version and revision", %{conn: conn} do
     previous = Application.get_env(:marknotes, :revision)
     on_exit(fn -> Application.put_env(:marknotes, :revision, previous) end)
