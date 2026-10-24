@@ -12,7 +12,11 @@ permissions:
 jobs:
   automerge:
     name: Enable auto-merge
-    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == 'MaxDac/marknotes-web'
+    if: >-
+      github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.repository == 'MaxDac/marknotes-web' &&
+      !github.event.pull_request.stack
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
