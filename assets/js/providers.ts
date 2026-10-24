@@ -298,6 +298,18 @@ interface GraphPage {
   "@odata.nextLink"?: string;
   "@odata.deltaLink"?: string;
 }
+/** Hosts OneDrive serves pre-authenticated downloads from; mirrored in the CSP (privacy_headers.ex). */
+const DOWNLOAD_HOSTS = [
+  ".1drv.com",
+  ".microsoftpersonalcontent.com",
+  ".sharepoint.com",
+];
+function downloadHost(url: string): boolean {
+  const { protocol, hostname } = new URL(url);
+  return (
+    protocol === "https:" && DOWNLOAD_HOSTS.some((h) => hostname.endsWith(h))
+  );
+}
 function graphTime(node: GraphItem): number | undefined {
   return time(
     node.fileSystemInfo?.lastModifiedDateTime ?? node.lastModifiedDateTime,
@@ -434,8 +446,10 @@ export class OneDrive implements Drive {
       `/me/drive/items/${encodeURIComponent(entry.id)}`,
     );
     const url = node["@microsoft.graph.downloadUrl"];
-    if (!url || new URL(url).protocol !== "https:")
-      throw new Error("OneDrive returned no secure download URL.");
+    if (!url || !downloadHost(url))
+      throw new Error(
+        "OneDrive returned a download address MarkNotes does not trust.",
+      );
     const r = await request(url);
     if (!r.ok) throw new ApiError(r.status, "OneDrive download");
     return r;

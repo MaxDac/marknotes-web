@@ -57,17 +57,21 @@ import {
   type ChordSequence,
 } from "./chords";
 import { ChordEditor } from "./chord-editor";
+import { type Mode, Session, validatePassphrase } from "./security";
 import {
   ask,
   button,
   checked,
   confirmDialog,
+  confirmWithOption,
   element,
   icon,
   type IconName,
   logo,
   menu,
   openDialog,
+  passphraseDialog,
+  passwordField,
   segmented,
   showError,
   toggle,
@@ -101,8 +105,40 @@ const formatting: [string, IconName | string, string, string][] = [
   ["Quote", "quote", "> ", ""],
 ];
 
+/** Locked browsers lock themselves again after this much inactivity. */
+const AUTO_LOCK_DEFAULT = 15;
+/** Idle minutes before a locked browser locks again; 0 turns auto-lock off. Mirrors the desktop app. */
+const AUTO_LOCK_CHOICES = [0, 5, 15, 60];
+const storageText: Record<Mode, string> = {
+  plain: "Notes are stored only in this browser",
+  locked: "Notes are encrypted in this browser",
+  ephemeral: "Memory only: notes are gone when this tab closes",
+};
+function securityLink(text = "How your data is protected"): HTMLAnchorElement {
+  const a = element("a", text, "security-link");
+  a.href = "/security";
+  a.target = "_blank";
+  a.rel = "noopener";
+  return a;
+}
+
+function confirmForget(): Promise<boolean> {
+  return confirmDialog({
+    title: "Forget this device?",
+    text: "Deletes every note, image, sync record, drive connection, passphrase and setting MarkNotes stored in this browser, and closes other MarkNotes tabs. Your drives are not touched, but anything not synced yet is lost.",
+    confirm: "Forget this device",
+    danger: true,
+  });
+}
+
 export class NotesUI {
+  private session!: Session;
   private store!: Store;
+  private idle?: ReturnType<typeof setInterval>;
+  private lastActive = Date.now();
+  private activity = () => {
+    this.lastActive = Date.now();
+  };
   private auth!: Auth;
   private editor!: EditorView;
   private chordEditor?: ChordEditor;
@@ -122,6 +158,7 @@ export class NotesUI {
   private health = new Map<string, "ok" | "error">();
   private media = matchMedia("(prefers-color-scheme: dark)");
   private theme = "system";
+  private autoLock = AUTO_LOCK_DEFAULT;
   private accent = "violet";
   private disposed = false;
   private mediaListener = () => this.applyTheme();
@@ -150,11 +187,16 @@ export class NotesUI {
     return el;
   }
   async start(): Promise<void> {
-    this.store = await Store.open();
+    this.session = await Session.open();
     if (this.disposed) {
-      this.store.close();
+      this.session.close();
       return;
     }
+    this.applyTheme();
+    this.store = this.session.locked
+      ? await this.unlockScreen()
+      : await this.session.store();
+    if (this.disposed) return;
     this.auth = new Auth(this.store, this.config);
     this.root.innerHTML = `
       <p id="connection" class="banner" role="status"></p>
@@ -202,7 +244,8 @@ export class NotesUI {
     this.get(".brand").prepend(logo());
     this.get(".local").append(
       icon("lock"),
-      element("span", "Notes are stored only in this browser"),
+      element("span", storageText[this.session.mode]),
+      securityLink(),
     );
     this.editor = createEditor(
       this.get("#editor"),
@@ -412,6 +455,13 @@ export class NotesUI {
     this.media.addEventListener("change", this.mediaListener);
     window.addEventListener("marknotes:error", this.errorListener);
     window.addEventListener("beforeunload", this.unloadListener);
+    if (this.session.mode === "locked") {
+      const minutes = await this.store.value<number>("auto-lock");
+      this.autoLock = AUTO_LOCK_CHOICES.includes(minutes ?? -1)
+        ? minutes!
+        : AUTO_LOCK_DEFAULT;
+      this.startAutoLock();
+    }
     for (const provider of ["dropbox", "onedrive"] as const) {
       const name = providerNames[provider];
       const b = button(
@@ -532,17 +582,278 @@ export class NotesUI {
           { icon: "trash", variant: "outline", id: "clean-images" },
         ),
       ),
-      section(
-        "Privacy",
-        element(
-          "p",
-          "Notes, paths and drive tokens never leave this browser except when syncing directly with your connected drives.",
-          "hint",
-        ),
-      ),
+      this.securitySettings(section, close),
     );
     footer.append(button("Done", close, { variant: "solid" }));
     body.querySelector<HTMLElement>("[role=radio][aria-checked=true]")?.focus();
+  }
+  private securitySettings(
+    section: (title: string, ...children: Node[]) => HTMLElement,
+    close: () => void,
+  ): HTMLElement {
+    const mode = this.session.mode;
+    const action = (
+      text: string,
+      id: string,
+      change: () => Promise<boolean>,
+      variant: "outline" | "danger" = "outline",
+    ) =>
+      button(
+        text,
+        () => {
+          close();
+          this.changeStorage(change);
+        },
+        { variant, id },
+      );
+    const actions = element("div", undefined, "setting-actions");
+    if (mode === "locked")
+      actions.append(
+        action("Lock now", "lock-now", async () => true),
+        action("Change passphrase", "change-passphrase", () =>
+          this.changePassphrase(),
+        ),
+        action("Remove passphrase", "remove-passphrase", () =>
+          this.removePassphrase(),
+        ),
+      );
+    else
+      actions.append(
+        action(
+          mode === "plain"
+            ? "Lock with a passphrase"
+            : "Store encrypted with a passphrase",
+          "lock-setup",
+          () => this.lockWithPassphrase(),
+        ),
+      );
+    if (mode === "ephemeral")
+      actions.append(
+        action("Store in this browser", "store-plain", () => this.storePlain()),
+      );
+    else
+      actions.append(
+        action("Use memory only", "memory-only", () => this.memoryOnly()),
+      );
+    actions.append(
+      action(
+        "Forget this device",
+        "forget-device",
+        () => this.forget(),
+        "danger",
+      ),
+    );
+    const describe = (): Record<Mode, string> => ({
+      plain:
+        "Notes, images, sync state and drive tokens are kept unencrypted in this browser's storage: anyone who can use this browser profile can read them. Lock with a passphrase to encrypt them.",
+      locked: `Notes, images, sync state and drive tokens are encrypted with your passphrase. ${
+        this.autoLock
+          ? `MarkNotes locks itself after ${this.autoLock} minutes without activity.`
+          : "MarkNotes stays unlocked until you lock it or close the tab."
+      }`,
+      ephemeral:
+        "Nothing is written to this browser's storage. Closing or reloading this tab forgets notes and drive connections; synced notes stay on your drives.",
+    });
+    const hint = element("p", describe()[mode], "hint");
+    const autoLock =
+      mode === "locked"
+        ? [
+            segmented(
+              "Lock after",
+              AUTO_LOCK_CHOICES.map((m) => ({
+                value: String(m),
+                label: m ? `${m} min` : "Off",
+              })),
+              String(this.autoLock),
+              (value) => {
+                this.autoLock = Number(value);
+                this.lastActive = Date.now();
+                hint.textContent = describe().locked;
+                void this.store
+                  .put("auto-lock", this.autoLock)
+                  .catch((e: unknown) => this.error(message(e)));
+              },
+            ),
+          ]
+        : [];
+    const s = section(
+      "Privacy and security",
+      hint,
+      ...autoLock,
+      actions,
+      element(
+        "p",
+        "Notes, paths and drive tokens never reach the MarkNotes server: they leave this browser only when syncing directly with your connected drives.",
+        "hint",
+      ),
+      securityLink(),
+    );
+    s.id = "security-settings";
+    return s;
+  }
+  /** Runs a storage change after saving, then reloads so the new storage takes over. */
+  private changeStorage(change: () => Promise<boolean>): void {
+    void this.run(async () => {
+      if (!(await this.leaveChords())) return;
+      if (await change()) this.reload();
+    });
+  }
+  private reload(): void {
+    window.removeEventListener("beforeunload", this.unloadListener);
+    this.session.close();
+    location.reload();
+  }
+  private lockWithPassphrase(): Promise<boolean> {
+    return passphraseDialog({
+      title: "Lock with a passphrase",
+      text: "Notes, images, sync state and drive tokens in this browser are encrypted with a key derived from this passphrase, which you enter each time you open MarkNotes. It cannot be recovered: if you forget it, forget this device and sync again from your drives, losing anything not synced.",
+      confirm: "Encrypt and lock",
+      next: true,
+      submit: async ({ next }) => {
+        validatePassphrase(next);
+        await this.session.switchTo("locked", next);
+      },
+    });
+  }
+  private async changePassphrase(): Promise<boolean> {
+    const changed = await passphraseDialog({
+      title: "Change passphrase",
+      text: "Your notes stay encrypted; only the passphrase that unlocks them changes.",
+      confirm: "Change passphrase",
+      current: true,
+      next: true,
+      submit: ({ current, next }) =>
+        this.session.changePassphrase(current, next),
+    });
+    if (changed) this.status("Passphrase changed");
+    return false;
+  }
+  private removePassphrase(): Promise<boolean> {
+    return passphraseDialog({
+      title: "Remove passphrase?",
+      text: "Notes, images, sync state and drive tokens will be stored unencrypted in this browser.",
+      confirm: "Remove passphrase",
+      current: true,
+      danger: true,
+      submit: async ({ current }) => {
+        await this.session.verify(current);
+        await this.session.switchTo("plain");
+      },
+    });
+  }
+  private async memoryOnly(): Promise<boolean> {
+    if (
+      !(await confirmDialog({
+        title: "Use memory only?",
+        text: "Everything MarkNotes stored in this browser (notes, images, sync state, drive connections and settings) is deleted now and nothing is saved from now on. Notes on your drives are kept, but anything not synced yet is lost. After the reload, connect a drive to load your notes.",
+        confirm: "Delete and use memory only",
+        danger: true,
+      }))
+    )
+      return false;
+    await this.session.switchTo("ephemeral");
+    return true;
+  }
+  private async storePlain(): Promise<boolean> {
+    if (
+      !(await confirmDialog({
+        title: "Store in this browser?",
+        text: "The notes, images and drive connections in this tab are saved unencrypted to this browser's storage and kept after it closes.",
+        confirm: "Store in this browser",
+      }))
+    )
+      return false;
+    await this.session.switchTo("plain");
+    return true;
+  }
+  private async forget(): Promise<boolean> {
+    if (!(await confirmForget())) return false;
+    await this.eraseDevice();
+    return false;
+  }
+  private async eraseDevice(): Promise<void> {
+    window.removeEventListener("beforeunload", this.unloadListener);
+    await this.session.forget();
+    location.reload();
+  }
+  /** Shows the passphrase prompt of a locked browser and resolves with the decrypted store. */
+  private unlockScreen(): Promise<Store> {
+    return new Promise((resolve) => {
+      const screen = element("main", undefined, "unlock"),
+        card = element("form", undefined, "unlock-card"),
+        heading = element("h1", "MarkNotes is locked"),
+        { field, input } = passwordField("Passphrase", "current-password"),
+        error = element("p", undefined, "field-error"),
+        unlock = button("Unlock", undefined, {
+          icon: "lock",
+          variant: "solid",
+          id: "unlock",
+        }),
+        forget = button("Forget this device", undefined, {
+          variant: "ghost",
+          id: "forget-locked",
+        }),
+        actions = element("div", undefined, "unlock-actions");
+      unlock.type = "submit";
+      error.setAttribute("role", "alert");
+      error.hidden = true;
+      heading.prepend(logo());
+      actions.append(forget, unlock);
+      card.append(
+        heading,
+        element(
+          "p",
+          "Notes in this browser are encrypted. Enter your passphrase to open them.",
+        ),
+        field,
+        error,
+        actions,
+        securityLink(),
+      );
+      screen.append(card);
+      this.root.replaceChildren(screen);
+      input.focus();
+      card.addEventListener("submit", (event) => {
+        event.preventDefault();
+        unlock.disabled = true;
+        showError(error, "");
+        this.session
+          .unlock(input.value)
+          .then((store) => {
+            input.value = "";
+            resolve(store);
+          })
+          .catch((e: unknown) => {
+            unlock.disabled = false;
+            showError(error, message(e));
+            input.select();
+          });
+      });
+      forget.addEventListener("click", () => {
+        void confirmForget().then(async (ok) => {
+          if (!ok) return;
+          await this.session.forget();
+          location.reload();
+        });
+      });
+    });
+  }
+  private startAutoLock(): void {
+    for (const type of ["pointerdown", "keydown", "wheel", "touchstart"])
+      window.addEventListener(type, this.activity, true);
+    this.idle = setInterval(() => {
+      if (
+        this.busy ||
+        this.autoLock === 0 ||
+        Date.now() - this.lastActive < this.autoLock * 60_000
+      )
+        return;
+      void this.save()
+        .then(() => {
+          if (!this.dirty) this.reload();
+        })
+        .catch((e: unknown) => this.error(message(e)));
+    }, 30_000);
   }
   private setEditable(value: boolean): void {
     if (this.editor) setEditorEditable(this.editor, value);
@@ -1124,14 +1435,27 @@ export class NotesUI {
     this.status("Account reconnected");
   }
   private async disconnect(account: Account): Promise<void> {
-    const ok = await confirmDialog({
+    const last = (await this.store.accounts()).length <= 1;
+    const choice = await confirmWithOption({
       title: "Disconnect drive?",
       text: `${account.label} will stop syncing. Notes in this browser and on the drive are kept.`,
       confirm: "Disconnect",
       danger: true,
+      // Offered only for the last drive: other drives would re-download the notes on their next sync.
+      option: last
+        ? {
+            label: "Also delete the notes stored on this device",
+            id: "delete-local-notes",
+            text: `${account.label} will stop syncing, and every note, image, sync record and setting MarkNotes stored in this browser is deleted. Nothing is deleted from the drive, but anything not synced yet is lost.`,
+          }
+        : undefined,
     });
-    if (!ok) return;
+    if (!choice) return;
     await this.auth.forget(account);
+    if (choice.option) {
+      await this.eraseDevice();
+      return;
+    }
     this.remotes.delete(account.id);
     this.health.delete(account.id);
     await this.refresh();
@@ -1352,6 +1676,9 @@ export class NotesUI {
     window.removeEventListener("beforeunload", this.unloadListener);
     this.editor?.destroy();
     for (const url of this.urls.values()) URL.revokeObjectURL(url);
-    this.store?.close();
+    clearInterval(this.idle);
+    for (const type of ["pointerdown", "keydown", "wheel", "touchstart"])
+      window.removeEventListener(type, this.activity, true);
+    this.session?.close();
   }
 }
