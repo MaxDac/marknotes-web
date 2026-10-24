@@ -172,12 +172,37 @@ test("the public shell cache can be removed without an old controller repopulati
 
 test("updates wait for confirmation, save edits and preserve browser data", async ({
   page,
+  context,
 }) => {
   await ready(page);
   await create(page);
   await saved(page, "Before update");
-  const restore = await update(page);
+  const shellFile = new URL("../dist/index.html", import.meta.url);
+  const workerFile = new URL("../dist/sw.js", import.meta.url);
+  const shell = await readFile(shellFile, "utf8");
+  const worker = await readFile(workerFile, "utf8");
+  const release = crypto.randomUUID();
+  const updatedShell = shell.replace(
+    "<title>MarkNotes</title>",
+    `<title>MarkNotes ${release}</title>`,
+  );
+  const updatedWorker = worker.replace(
+    /("revision":")[^"]+(","url":"index\.html")/,
+    (_match: string, prefix: string, suffix: string) =>
+      `${prefix}${release}${suffix}`,
+  );
+  expect(updatedShell).not.toBe(shell);
+  expect(updatedWorker).not.toBe(worker);
   try {
+    await writeFile(shellFile, updatedShell);
+    await writeFile(workerFile, updatedWorker);
+    await page.evaluate(async () => {
+      await (await navigator.serviceWorker.getRegistration())!.update();
+    });
+    await expect(
+      page.getByRole("button", { name: "Save and update" }),
+    ).toBeVisible();
+    await expect(page).toHaveTitle("MarkNotes");
     await expect(
       page.getByRole("textbox", { name: "Markdown editor" }),
     ).toHaveText("Before update");
@@ -191,12 +216,17 @@ test("updates wait for confirmation, save edits and preserve browser data", asyn
     await expect(
       page.getByRole("button", { name: "Save and update" }),
     ).toHaveCount(0);
+    await expect(page).toHaveTitle(`MarkNotes ${release}`);
+    await context.setOffline(true);
     await page.reload();
+    await expect(page).toHaveTitle(`MarkNotes ${release}`);
     await expect(
       page.getByRole("textbox", { name: "Markdown editor" }),
     ).toHaveText("Saved by update");
   } finally {
-    await restore();
+    await context.setOffline(false);
+    await writeFile(shellFile, shell);
+    await writeFile(workerFile, worker);
   }
 });
 

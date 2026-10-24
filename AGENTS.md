@@ -43,6 +43,9 @@ Install Caddy for Linux x86-64 tests with `sh deploy/install-caddy.sh /tmp/markn
 PATH. This verifies the upstream SHA-512 checksum. Production browser tests use Caddy and a built `assets/dist`,
 not Vite's dev/preview server. Existing Elixir/Dialyzer job names are retained because the live ruleset requires them;
 they now perform substantive static hosting/config checks. Renaming them requires separately authorized ruleset work.
+Hosting contracts compare metadata with `GIT_SHA` / `APP_VERSION` (or the documented local defaults). If building
+with overrides, pass them to the contracts too. CI uses explicit metadata; container contracts accept optional
+expected revision/version arguments: `sh deploy/test-container.sh <image> <revision> <version>`.
 
 ## Architecture
 
@@ -106,7 +109,7 @@ only points there). `assets/parity/fixtures.test.ts` runs every `spec/fixtures` 
 ## Deploy and release
 
 - Every push to `main` runs `fly.yml`: all checks, then `deploy.yml` (Fly.io `marknotes`, `--remote-only --ha=false`,
-  smoke test asserting `/health` reports the deployed `revision`).
+  smoke tests asserting health status, exact revision/version, public routes/404s and the actual minimum-resource inventory).
 - `release.yml` (manual, `main` only): validates `X.Y.Z`, runs checks, creates the `vX.Y.Z` GitHub Release (no binary
   assets: the product is the deployment), deploys with `APP_VERSION`, verifies `/health` `version`, writes a release
   summary (version, pre-release, tag, deployed URL).
@@ -114,6 +117,11 @@ only points there). `assets/parity/fixtures.test.ts` runs every `spec/fixtures` 
   unless explicitly asked. The multi-stage Docker build uses Node, then ships only Caddy, public assets/config and jq.
   No deployment is implied by local implementation or testing; deployment handoffs must identify revision, tests,
   origin preservation, provider settings and worker-aware rollback.
+- Issue #34 plans a direct old-app deletion/replacement, not an in-place deployment. Cost approval and immediate
+  exact-app destruction confirmation are separate gates. Pause Fly Deploy/Release before merging; preserve the
+  rollback image outside the old registry and securely establish secret restoration before deletion. App deletion
+  deletes images/secrets too, and same-name reclamation is not guaranteed. Agree any fallback hostname/OAuth changes,
+  preserve browser data, verify acceptance/resources and only then restore automation. See README's migration runbook.
 
 ## Sibling repositories
 

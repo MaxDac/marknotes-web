@@ -218,9 +218,14 @@ changing a master SVG, regenerate them with `cd branding && npm install --no-pac
   flag. It runs the checks, publishes the `vX.Y.Z` GitHub Release (no binary assets; the deployment is the product),
   deploys that commit to Fly and writes a release summary (version, pre-release, tag, commit, deployed URL and version).
 - `deploy.yml` (reusable) is the single deploy job used by both. It fails early with a clear error if `FLY_API_TOKEN` is
-  missing, runs `flyctl deploy --remote-only --ha=false`, then smoke-tests `/health` and `/` with retries, asserting that
-  `/health` reports the deployed commit (`revision`) and, for releases, the release `version`. A job summary records the
-  URL, image label, version and commit.
+  missing, runs `flyctl deploy --remote-only --ha=false`, verifies the actual single-Machine/no-volume/shared-IP
+  inventory, then smoke-tests the public routes and genuine 404s. `/health` must report `status: "ok"`, the deployed
+  commit (`revision`) and the intended `version`, including the package default for main deployments. A job summary
+  records the URL, image label, version and commit.
+
+Hosting checks verify exact CSP connection origins, mutable-route privacy/cache headers and every emitted
+JS/CSS/Wasm asset. CI builds hosting/container contracts with an explicit revision and version. Browser update
+coverage replaces a precached shell revision and verifies the new shell and existing notes survive an offline reload.
 
 `/health` returns `{"status": "ok", "version": ..., "revision": ...}`. The version defaults to `assets/package.json`, overridden by the
 `APP_VERSION` Docker build argument (set by `release.yml`) and otherwise defaults to `0.1.0`; the revision is the
@@ -228,22 +233,56 @@ changing a master SVG, regenerate them with `cd branding && npm install --no-pac
 
 ## Deployment and release
 
-### Existing app and deployment handoff
+### Replacement-app migration and deployment handoff
 
-The migration is built/tested separately from the actual Fly cutover. Reuse the existing `marknotes` app, IPs,
-provider registrations and origin; do not run `fly launch`, recreate resources, rotate credentials, or delete old
-secrets as part of a routine deployment. The unused Phoenix secret may remain for rollback.
+The approved migration direction in [#34](https://github.com/MaxDac/marknotes-web/issues/34) is to retire the old
+Phoenix Fly app and create a replacement, not deploy over it. Implementation/CI are separate from authorization to
+spend, merge or destroy the old app. Prefer recreating `marknotes` in the existing organization to retain
+`https://marknotes.fly.dev`, but **deleting an app does not guarantee that its name can be reclaimed**.
+The user accepts a direct cutover without a staging app; if the name is unavailable, agree on the replacement name
+and origin before creating it. Do not substitute a different provider automatically.
+
+Before the cutover:
+
+1. Verify the billing plan, organization-wide allowances/current usage and approve compute, stopped-rootfs, build
+   and traffic costs. Autostop and a small image do not establish zero cost.
+2. Record the exact app/organization, Machine/IP/resource inventory, config, public provider IDs, secret **names**,
+   old health metadata and immutable image digest. Save the old image independently of the app registry and verify
+   restoration; Fly app deletion also deletes registry images and secrets. Establish secure Phoenix-secret recovery
+   without printing values. Recording a digest or secret name alone is not a backup.
+3. Run final checks, preserve a deployable PWA artifact, and pause the **Fly Deploy** and **Release** entry workflows
+   before merging. Record their previous state and wait for active/queued deployments to finish. Keep PR CI and
+   CodeQL enabled. Squash merging changes the SHA: build/deploy the actual approved merged revision with its real
+   `GIT_SHA` and intended `APP_VERSION`, not a local test-image label.
+4. Save and close editing tabs. Existing test notes are disposable for this migration, but do not clear site data,
+   IndexedDB, credentials or PWA state. A reclaimed hostname preserves the browser origin; a different hostname has
+   separate storage and installed-app identity. If important unsynced data must move, establish and test a sync-based
+   or export/import procedure first; there is no automatic browser-data transfer.
+5. Obtain immediate final confirmation of the exact old app to destroy, irreversible resource/image/secret loss,
+   service interruption, name-reclaim risk and recovery limitations. Only then destroy it and create the agreed
+   replacement. Use one shared-cpu-1x / 256 MB Machine, one approved region, shared IPv4/IPv6, port 8080, HTTPS,
+   autostart/autostop and minimum running zero. No volume, database, dedicated IPv4 or spare Machine.
+6. Configure a replacement-app-scoped deployment token securely. Same-name recreation does not prove the old token
+   is valid. Preserve public-ID overrides and intentional blank provider settings. If the origin changes, update
+   `fly.toml`, deploy workflow app/region/URLs, environment reporting, documentation and both OAuth registrations
+   consistently before deployment. No private OAuth client secret belongs in the frontend.
+7. Verify exact health metadata, routes/headers/404s, offline/update/encryption/data continuity, real provider
+   authentication and disposable sync, cold starts, memory and the actual resource inventory. Audit only identified
+   obsolete migration resources. Restore the previously enabled deployment/release workflows when the target and
+   token are verified, and close #34 only after deployment and retirement acceptance are complete.
 
 Reuse the existing GitHub `production` environment; `deploy.yml` records the production URL there. No GitHub variables
 are required. Keep `FLY_API_TOKEN` as a repository secret so both reusable-workflow callers can forward it.
-The token is scoped to `marknotes`, not the organization. Any credential rotation is a separate authorized operation.
+The token must be scoped to the agreed replacement app, not the organization. Replacing the migration's app-scoped
+token does not authorize rotating other credentials.
 Do not print tokens, commit them, or store them in local configuration files.
 
 The public `DROPBOX_APP_KEY` and `MSAL_CLIENT_ID` have application defaults; no provider client secrets are needed.
 Existing Fly environment values/secrets override those defaults. To use different registrations, supply runtime
 overrides through `fly secrets import --stage -a marknotes` (stdin `NAME=VALUE` pairs); these IDs are public even when
 stored as Fly secrets. Explicit empty/whitespace values disable the corresponding provider.
-`SECRET_KEY_BASE` is no longer read; retain it during the initial rollout for rollback to the previous Phoenix image.
+`SECRET_KEY_BASE` is no longer read by Caddy. A rollback to Phoenix still needs securely recoverable configuration;
+deleting the old app deletes its secret, so plan restoration before destruction.
 
 ### Portable container and static hosting
 
@@ -284,11 +323,15 @@ fly deploy -a marknotes --ha=false --image registry.fly.io/marknotes:<label>
 curl --fail https://marknotes.fly.dev/health             # confirm version/revision
 ```
 
-Then revert or fix on `main`; the next push to `main` deploys again. An installed service worker can keep serving
-the PWA after a server rollback. For an emergency rollback to Phoenix, unregister the MarkNotes worker and delete
-only its public app caches using browser developer tools, then reload online; **do not clear site data/IndexedDB**,
-which would delete unsynced notes. Coordinate this explicitly before a production rollback.
+This normal release rollback only works while the source app/registry image still exists. After old-app deletion,
+restore the independently saved image and required config to a viable app; the deleted app's release list/image is
+not a recovery source. Failure to reclaim its hostname also prevents automatic restoration of the old browser origin.
 
+Serialize rollback with deploy/release workflows. An installed service worker can keep serving the PWA after a server
+rollback. Save/sync wanted work, close other app/PWA tabs, unregister only the MarkNotes root worker and remove only
+`marknotes-shell`, `marknotes-public-config-v1` and `marknotes-offline-control`, then reopen online. Respect the
+`marknotes:public-cache` Web Lock if automating cleanup. **Never use Forget this device or clear site data, IndexedDB
+or credentials to roll back.** Then revert or fix `main` before restoring automatic deployment.
 ### Fly.io deployment and cost gate
 
 This app needs **no database, Ecto, persistent volume or dedicated IPv4**. `fly.toml` uses a single shared-CPU 256 MB
@@ -311,7 +354,7 @@ or cost guarantees:
 | Uncompressed Docker image | 182.84 MiB | 23.84 MiB |
 | Container memory with five tabs | 120.6-120.8 MiB | 21.14 MiB |
 
-Do not recreate the app/registrations or rotate keys to deploy.
+Routine deployments after the agreed replacement do not recreate the app/registrations or rotate keys.
 If the CLI cannot see `marknotes` or the repository deploy secret, restore the correct account/organization access
 before continuing. Read-only checks and an explicitly authorized manual deployment:
 
@@ -319,7 +362,7 @@ before continuing. Read-only checks and an explicitly authorized manual deployme
 fly status -a marknotes
 fly secrets list -a marknotes
 gh secret list -R MaxDac/marknotes-web
-fly deploy --remote-only --ha=false -a marknotes
+fly deploy --remote-only --ha=false -a marknotes --build-arg "GIT_SHA=$(git rev-parse HEAD)"
 fly machine list -a marknotes
 curl --fail https://marknotes.fly.dev/health
 ```
@@ -331,8 +374,8 @@ version plus a conflicted copy. Automated mock results must not be reported as r
 
 | Secret | Where | Purpose |
 | --- | --- | --- |
-| `FLY_API_TOKEN` | GitHub repository secret | Deploy token (`fly tokens create deploy`) used by `deploy.yml`. |
-| `SECRET_KEY_BASE` | Existing Fly secret | Unused by Caddy; retain initially for Phoenix rollback. |
+| `FLY_API_TOKEN` | GitHub repository secret | Replacement-app-scoped deploy token (`fly tokens create deploy`) used by `deploy.yml`. |
+| `SECRET_KEY_BASE` | Old Phoenix configuration | Unused by Caddy; securely establish restoration before deleting the old app. |
 | `DROPBOX_APP_KEY` | Optional Fly runtime override | Public Dropbox app key (PKCE, no secret). Unset uses the application default; explicit blank disables Dropbox. |
 | `MSAL_CLIENT_ID` | Optional Fly runtime override | Public Microsoft Entra client ID. Unset uses the application default; explicit blank disables OneDrive. |
 

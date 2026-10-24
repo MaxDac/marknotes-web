@@ -16,6 +16,9 @@ jobs:
     defaults:
       run:
         working-directory: assets
+    env:
+      GIT_SHA: ${{ github.sha }}
+      APP_VERSION: 0.0.0-contract
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -136,7 +139,12 @@ jobs:
           push: false
           load: true
           tags: marknotes:test
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            APP_VERSION=0.0.0-contract
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Verify runtime configuration and image contracts
-        run: sh deploy/test-container.sh marknotes:test
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: sh deploy/test-container.sh marknotes:test "$EXPECTED_REVISION" 0.0.0-contract

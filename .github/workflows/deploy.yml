@@ -1,7 +1,7 @@
 name: Deploy
 
 # Reusable Fly.io production deploy shared by Fly Deploy (push to main) and Release.
-# Builds the image remotely, then smoke-tests /health and /, asserting the deployed revision (and version, if given).
+# Builds remotely, verifies health metadata/routes and checks the actual resource inventory.
 on:
   workflow_call:
     inputs:
@@ -41,7 +41,9 @@ jobs:
       url: ${{ steps.smoke.outputs.url }}
       version: ${{ steps.smoke.outputs.version }}
     env:
+      APP_NAME: marknotes
       APP_URL: https://marknotes.fly.dev
+      PRIMARY_REGION: ams
       IMAGE_LABEL: ${{ inputs.image-label }}
       APP_VERSION: ${{ inputs.app-version }}
     steps:
@@ -56,15 +58,36 @@ jobs:
 
       - uses: actions/checkout@v7
 
+      - name: Resolve expected version
+        run: |
+          if [ -z "$APP_VERSION" ]; then
+            APP_VERSION=$(jq -er '.version | select(type == "string" and length > 0)' assets/package.json)
+          fi
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+
       - uses: superfly/flyctl-actions/setup-flyctl@1.6
 
       - name: Deploy
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          args=(--remote-only --ha=false --image-label "$IMAGE_LABEL" --build-arg "GIT_SHA=$GITHUB_SHA")
-          if [ -n "$APP_VERSION" ]; then args+=(--build-arg "APP_VERSION=$APP_VERSION"); fi
+          args=(--app "$APP_NAME" --remote-only --ha=false --image-label "$IMAGE_LABEL"
+            --build-arg "GIT_SHA=$GITHUB_SHA" --build-arg "APP_VERSION=$APP_VERSION")
           flyctl deploy "${args[@]}"
+
+      - name: Verify minimum-resource inventory
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl machines list --app "$APP_NAME" --json | jq -e --arg region "$PRIMARY_REGION" '
+            length == 1 and all(.[];
+              .region == $region and .config.guest.cpu_kind == "shared" and
+              .config.guest.cpus == 1 and .config.guest.memory_mb == 256 and
+              ((.config.mounts // []) | length == 0))'
+          flyctl volumes list --app "$APP_NAME" --json | jq -e 'length == 0'
+          flyctl ips list --app "$APP_NAME" --json | jq -e '
+            any(.[]; .Type == "shared_v4") and any(.[]; .Type == "v6") and
+            all(.[]; .Type == "shared_v4" or .Type == "v6")'
 
       - name: Smoke test
         id: smoke
@@ -75,11 +98,12 @@ jobs:
             if health=$(curl --silent --show-error --fail --max-time 15 "$APP_URL/health"); then
               revision=$(jq -r '.revision // empty' <<< "$health")
               version=$(jq -r '.version // empty' <<< "$health")
-              if [ "$revision" = "$GITHUB_SHA" ] && { [ -z "$APP_VERSION" ] || [ "$version" = "$APP_VERSION" ]; }; then
+              status=$(jq -r '.status // empty' <<< "$health")
+              if [ "$status" = "ok" ] && [ "$revision" = "$GITHUB_SHA" ] && [ "$version" = "$APP_VERSION" ]; then
                 ok=1
                 break
               fi
-              echo "Attempt $attempt: /health reports revision '$revision', version '$version'; waiting for the new release."
+              echo "Attempt $attempt: /health reports status '$status', revision '$revision', version '$version'; waiting for the new release."
             else
               echo "Attempt $attempt: /health not reachable yet."
             fi
@@ -93,6 +117,13 @@ jobs:
             --output /dev/null "$APP_URL/"
           for path in /config.json /sw.js /security /oauth/dropbox /oauth/onedrive /site.webmanifest; do
             curl --silent --show-error --fail --max-time 20 --output /dev/null "$APP_URL$path"
+          done
+          for path in /missing /assets/missing.js /oauth/unknown /live; do
+            status=$(curl --silent --show-error --max-time 20 --output /dev/null --write-out '%{http_code}' "$APP_URL$path")
+            if [ "$status" != 404 ]; then
+              echo "::error::Expected 404 for $path, got $status."
+              exit 1
+            fi
           done
           echo "DEPLOYED_VERSION=$version" >> "$GITHUB_ENV"
           {

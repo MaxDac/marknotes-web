@@ -1,7 +1,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { publicConfig } from "../public-config.mjs";
 
 const origin = "http://localhost:4107";
@@ -61,6 +61,12 @@ test("preserves CSP and privacy headers on app, callbacks and errors", async () 
     "/security",
     "/oauth/dropbox?code=private-code",
     "/oauth/onedrive",
+    "/config.json",
+    "/health",
+    "/sw.js",
+    "/site.webmanifest",
+    "/assets/missing.js",
+    "/oauth/unknown",
     "/missing",
   ]) {
     const response = await fetch(origin + path);
@@ -68,11 +74,27 @@ test("preserves CSP and privacy headers on app, callbacks and errors", async () 
     assert.match(csp, /script-src 'self' 'wasm-unsafe-eval';/);
     assert.match(csp, /worker-src 'self';/);
     assert.match(csp, /img-src 'self' data: blob:;/);
-    assert.match(csp, /https:\/\/api.dropboxapi.com/);
+    const connect = csp
+      .split(";")
+      .map((directive) => directive.trim().split(/\s+/))
+      .find(([name]) => name === "connect-src");
+    assert.deepEqual(connect, [
+      "connect-src",
+      "'self'",
+      "https://api.dropboxapi.com",
+      "https://content.dropboxapi.com",
+      "https://graph.microsoft.com",
+      "https://login.microsoftonline.com",
+      "https://*.1drv.com",
+      "https://*.microsoftpersonalcontent.com",
+      "https://*.sharepoint.com",
+    ]);
     assert.doesNotMatch(csp, /'unsafe-eval'|wss?:|connect-src https:/);
     assert.equal(response.headers.get("referrer-policy"), "no-referrer");
     assert.equal(response.headers.get("x-content-type-options"), "nosniff");
     assert.match(response.headers.get("permissions-policy"), /camera=\(\)/);
+    assert.equal(response.headers.get("cache-control"), "no-store", path);
+    assert.equal(response.headers.get("set-cookie"), null, path);
     assert.doesNotMatch(await response.text(), /private-code/);
   }
 });
@@ -89,13 +111,46 @@ test("health and runtime public config remain uncached JSON", async () => {
   const response = await fetch(origin + "/health");
   assert.match(response.headers.get("content-type"), /application\/json/);
   assert.equal(response.headers.get("cache-control"), "no-store");
-  assert.deepEqual(
-    await response.json(),
-    JSON.parse(await readFile("dist/health.json")),
-  );
+  const { version } = JSON.parse(await readFile("package.json", "utf8"));
+  assert.deepEqual(await response.json(), {
+    status: "ok",
+    version: process.env.APP_VERSION?.trim() || version,
+    revision: process.env.GIT_SHA?.trim() || "unknown",
+  });
   const config = await fetch(origin + "/config.json");
+  assert.match(config.headers.get("content-type"), /application\/json/);
   assert.equal(config.headers.get("cache-control"), "no-store");
   assert.equal((await config.json()).schema, 1);
+});
+test("serves every emitted script, stylesheet and Wasm asset with the correct MIME and cache policy", async () => {
+  const files = (await readdir("dist", { recursive: true })).filter((file) =>
+    /\.(js|css|wasm)$/.test(file),
+  );
+  assert.ok(
+    files.some((file) => file.startsWith("assets/") && file.endsWith(".js")),
+  );
+  assert.ok(files.some((file) => file.endsWith(".css")));
+  const types = {
+    js: /(?:text|application)\/javascript/,
+    css: /text\/css/,
+    wasm: /application\/wasm/,
+  };
+  for (const file of files) {
+    const response = await fetch(`${origin}/${file}`);
+    assert.equal(response.status, 200, file);
+    assert.match(
+      response.headers.get("content-type"),
+      types[file.split(".").at(-1)],
+      file,
+    );
+    assert.equal(
+      response.headers.get("cache-control"),
+      /^assets\/.+-[A-Za-z0-9_-]{8,}\.(js|css|wasm)$/.test(file)
+        ? "public, max-age=31536000, immutable"
+        : "no-store",
+      file,
+    );
+  }
 });
 test("keeps callbacks distinct and unknown routes as genuine 404s", async () => {
   for (const provider of ["dropbox", "onedrive"]) {
