@@ -8,7 +8,7 @@ ARG APP_VERSION=""
 ARG GIT_SHA=unknown
 ENV APP_VERSION=$APP_VERSION GIT_SHA=$GIT_SHA
 RUN npm run build
-FROM caddy:2.11.2-alpine AS runtime
+FROM caddy:2.11.6-alpine AS runtime
 RUN apk add --no-cache jq && addgroup -S marknotes && adduser -S -G marknotes -u 10001 marknotes \
     && mkdir -p /srv && chown marknotes:marknotes /srv
 ENV PORT=8080 SITE_ROOT=/srv XDG_DATA_HOME=/tmp/caddy-data XDG_CONFIG_HOME=/tmp/caddy-config
