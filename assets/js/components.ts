@@ -371,16 +371,44 @@ export function confirmDialog(options: {
   confirm: string;
   danger?: boolean;
 }): Promise<boolean> {
+  return confirmWithOption(options).then((result) => result !== null);
+}
+
+/**
+ * A confirmation that can also show a checkbox (`option`). Resolves to null when cancelled, else to whether the
+ * checkbox was ticked. `optionText` replaces `text` while the checkbox is ticked.
+ */
+export function confirmWithOption(options: {
+  title: string;
+  text: string;
+  confirm: string;
+  danger?: boolean;
+  option?: { label: string; id: string; text?: string };
+}): Promise<{ option: boolean } | null> {
   return new Promise((resolve) => {
     const { body, footer, close } = openDialog(options.title, () =>
-      resolve(false),
+      resolve(null),
     );
-    body.append(element("p", options.text));
+    const text = element("p", options.text);
+    body.append(text);
+    let box: HTMLInputElement | undefined;
+    if (options.option) {
+      const { label, id, text: alt } = options.option;
+      const row = element("label", undefined, "check");
+      box = element("input");
+      box.type = "checkbox";
+      box.id = id;
+      box.addEventListener("change", () => {
+        text.textContent = box!.checked && alt ? alt : options.text;
+      });
+      row.append(box, element("span", label));
+      body.append(row);
+    }
     const ok = button(
       options.confirm,
       () => {
         close();
-        resolve(true);
+        resolve({ option: box?.checked ?? false });
       },
       { variant: options.danger ? "danger" : "solid" },
     );
@@ -389,7 +417,7 @@ export function confirmDialog(options: {
         "Cancel",
         () => {
           close();
-          resolve(false);
+          resolve(null);
         },
         { variant: "outline" },
       ),

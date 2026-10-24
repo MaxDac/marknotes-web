@@ -51,6 +51,22 @@ defmodule MarknotesWeb.PageControllerTest do
     assert get_resp_header(conn, "cache-control") == ["no-store"]
   end
 
+  test "denies device and sensor APIs with a Permissions-Policy", %{conn: conn} do
+    [policy] = conn |> get("/") |> get_resp_header("permissions-policy")
+
+    for feature <- ~w(camera microphone geolocation payment usb) do
+      assert policy =~ "#{feature}=()"
+    end
+  end
+
+  test "the session cookie is HttpOnly, and Secure in production" do
+    prod = Config.Reader.read!("config/prod.exs", env: :prod)
+    refute Keyword.get(prod[:marknotes] || [], :secure_cookie) == false
+    source = File.read!("lib/marknotes_web/endpoint.ex")
+    assert source =~ "secure: Application.compile_env(:marknotes, :secure_cookie, true)"
+    assert source =~ "http_only: true"
+  end
+
   test "links and serves the shared MarkNotes icons", %{conn: conn} do
     html = conn |> get("/") |> html_response(200)
     assert html =~ ~s(href="/favicon.svg")

@@ -1,5 +1,8 @@
 import Config
 
+# Served over plain http: the session cookie cannot be `Secure` (it is in prod).
+config :marknotes, secure_cookie: false
+
 # For development, we disable any cache and enable
 # debugging and code reloading.
 #

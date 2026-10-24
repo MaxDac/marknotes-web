@@ -68,8 +68,8 @@ Chosen in Settings › Privacy and security. The mode is stored in the IndexedDB
     written before it is applied in memory, so a failed write leaves both unchanged. Sealing happens outside
     IndexedDB transactions because those auto-commit across WebCrypto awaits.
   - Credentials inside the working set are encrypted with the `vault` key.
-  - The app locks after 15 minutes without activity, or on demand, by saving and reloading the page, which drops the
-    memory.
+  - The app locks after an idle time chosen in Settings (off, 5, 15 or 60 minutes; default 15, kept in the sealed
+    store), or on demand, by saving and reloading the page, which drops the memory.
 - **ephemeral** (memory only): a `MemoryBackend` that never persists anything. Credentials use a random per-tab key. Switching to it
   deletes everything stored locally; drives keep their copies.
 
@@ -78,7 +78,9 @@ in `plain`. Switching modes requires that no other MarkNotes tab is open. Switch
 credentials, except device-local keys.
 
 **Forget this device** (Settings, and the unlock screen) deletes the IndexedDB database and clears localStorage,
-sessionStorage and Cache Storage for the origin. It does not touch the drives.
+sessionStorage and Cache Storage for the origin. It does not touch the drives. Disconnecting the **last** drive offers
+the same deletion as a checkbox, **Also delete the notes stored on this device** (unticked by default), mirroring the
+desktop app.
 
 ### Network and page hardening
 
@@ -95,7 +97,10 @@ sessionStorage and Cache Storage for the origin. It does not touch the drives.
   - `img-src 'self' data: blob:` and `font-src 'self'`.
   - `object-src 'none'`, `base-uri 'none'` and `form-action 'none'`.
   - `frame-ancestors 'self'`.
-- Headers: `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`.
+- Headers: `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, and a
+  `Permissions-Policy` that denies camera, microphone, geolocation, payment, USB and the other device/sensor APIs.
+- The Phoenix session cookie is `HttpOnly` and, in production, `Secure` (`secure_cookie: false` only in dev and test,
+  which are served over plain http). It holds only the CSRF token, never note data.
 - The preview is sanitised with DOMPurify. It shows no raw HTML and no remote images, only local `attachments/` as
   `blob:` URLs.
 - OAuth: Dropbox uses PKCE and Microsoft uses MSAL.js with a memory cache, both in a popup. The callback page contains
@@ -127,5 +132,7 @@ sessionStorage and Cache Storage for the origin. It does not touch the drives.
   - Memory-only storage writes nothing and allows a single tab.
   - Forget device.
 - `assets/tests/providers.test.ts`: OneDrive download host allowlist.
-- `test/marknotes_web/controllers/page_controller_test.exs`: CSP `connect-src` and the `/security` page.
-- `assets/e2e/notes.spec.ts`: passphrase lock and unlock, memory-only mode, forget device, and the security page link.
+- `test/marknotes_web/controllers/page_controller_test.exs`: CSP `connect-src`, `Permissions-Policy`, the session
+  cookie flags and the `/security` page.
+- `assets/e2e/security.spec.ts`: passphrase lock and unlock, the auto-lock choice, memory-only mode, forget device,
+  deleting local notes when disconnecting the last drive, and the security page link.
