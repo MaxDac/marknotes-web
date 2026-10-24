@@ -1,5 +1,5 @@
 FROM rust:1.99.1-slim-bookworm AS sync-toolchain
-FROM node:24.21.0-bookworm-slim AS assets
+FROM node:26.12.0-bookworm-slim AS assets
 ENV CARGO_HOME=/usr/local/cargo RUSTUP_HOME=/usr/local/rustup RUSTUP_TOOLCHAIN=1.99.1
 ENV PATH=/usr/local/cargo/bin:$PATH
 COPY --from=sync-toolchain /usr/local/cargo/ /usr/local/cargo/

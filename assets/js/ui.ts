@@ -26,6 +26,7 @@ import {
 } from "./notemeta";
 import {
   Store,
+  TreeBusyError,
   type Note,
   type Account,
   exclusive,
@@ -36,6 +37,12 @@ import {
 } from "./storage";
 import { drive, type Drive } from "./providers";
 import { syncAll, message } from "./sync";
+import {
+  RECONNECT_SETTING,
+  ReconnectSync,
+  type ReconnectResult,
+} from "./reconnect";
+import { type SyncFailure } from "./sync-errors";
 import {
   addConflicts,
   applyMerge,
@@ -162,7 +169,17 @@ export class NotesUI {
   private accent = "violet";
   private disposed = false;
   private ready = false;
-  private networkListener = () => this.connection(navigator.onLine);
+  private reconnectSync?: ReconnectSync;
+  private reconnectEnabled = false;
+  private reconnectChannel?: BroadcastChannel;
+  private autoStopped = new Set<string>();
+  private networkListener = (event?: Event) => {
+    const online = event ? event.type === "online" : navigator.onLine;
+    this.connection(online);
+    this.updateReconnect(online);
+  };
+  private reconnectListener = () => this.updateReconnect();
+  private draftListener = () => queueMicrotask(() => this.updateReconnect());
   private mediaListener = () => this.applyTheme();
   private refs: NoteRef[] = [];
   private urls = new Map<string, string>();
@@ -202,6 +219,7 @@ export class NotesUI {
     this.auth = new Auth(this.store, this.config);
     this.root.innerHTML = `
       <p id="connection" class="banner" role="status"></p>
+      <p id="reconnect-status" class="banner" role="status" aria-live="polite" hidden></p>
       <fieldset id="workspace" class="app">
         <legend class="sr-only">Notes workspace</legend>
         <aside class="sidebar" id="sidebar">
@@ -365,7 +383,12 @@ export class NotesUI {
     this.get("#top-actions").append(
       button(
         "Sync now",
-        act(() => this.sync()),
+        () => {
+          this.reconnectSync?.cancel();
+          void this.run(async () => {
+            await this.sync();
+          });
+        },
         {
           icon: "refresh",
           variant: "outline",
@@ -487,11 +510,87 @@ export class NotesUI {
     if (last) await exclusive(() => this.open(last));
     this.chrome();
     this.ready = true;
+    this.reconnectEnabled =
+      (await this.store.value<boolean>(RECONNECT_SETTING)) === true;
+    this.reconnectSync = new ReconnectSync(
+      navigator.onLine,
+      () => this.automaticSync(),
+      (text) => {
+        const label = this.get("#reconnect-status");
+        label.textContent = text;
+        label.hidden = !text;
+      },
+      (error) => this.error(message(error)),
+    );
+    this.reconnectChannel = new BroadcastChannel("marknotes:reconnect-setting");
+    this.reconnectChannel.onmessage = () => {
+      void this.readReconnectSetting().catch((error: unknown) =>
+        this.error(message(error)),
+      );
+    };
+    document.addEventListener("visibilitychange", this.reconnectListener);
+    document.addEventListener("click", this.draftListener);
+    document.addEventListener("input", this.draftListener);
+    document.addEventListener("close", this.draftListener, true);
     window.addEventListener("online", this.networkListener);
     window.addEventListener("offline", this.networkListener);
     this.networkListener();
     if (navigator.onLine && (await this.store.accounts()).length)
-      await this.run(() => this.sync());
+      await this.run(async () => {
+        await this.sync();
+      });
+  }
+  private updateReconnect(online?: boolean): void {
+    this.reconnectSync?.update({
+      enabled: this.reconnectEnabled,
+      ...(online === undefined ? {} : { online }),
+      visible: document.visibilityState === "visible",
+      available:
+        this.ready &&
+        !this.disposed &&
+        !this.busy &&
+        !this.saving &&
+        !this.session.locked &&
+        !this.chordEditor?.dirty &&
+        !document.querySelector("dialog[open]"),
+    });
+  }
+  private async readReconnectSetting(): Promise<void> {
+    this.reconnectEnabled =
+      (await this.store.value<boolean>(RECONNECT_SETTING)) === true;
+    if (!this.disposed) this.updateReconnect();
+  }
+  private async automaticSync(): Promise<ReconnectResult> {
+    await this.readReconnectSetting();
+    if (!this.reconnectEnabled || this.disposed) return { state: "stop" };
+    if (
+      this.busy ||
+      this.saving ||
+      this.chordEditor?.dirty ||
+      document.querySelector("dialog[open]") ||
+      document.visibilityState !== "visible" ||
+      !navigator.onLine
+    )
+      return { state: "deferred" };
+    let result: ReconnectResult = { state: "stop" };
+    const state = await this.run(async () => {
+      // Recheck after saving: an opt-out in another tab must cancel pending work.
+      await this.readReconnectSetting();
+      if (!this.reconnectEnabled || this.disposed) return;
+      if (
+        document.visibilityState !== "visible" ||
+        !navigator.onLine ||
+        this.chordEditor?.dirty ||
+        document.querySelector("dialog[open]")
+      ) {
+        result = { state: "deferred" };
+        return;
+      }
+      result = await this.sync(true);
+    }, true);
+    return state === "complete"
+      ? result
+      : { state: state === "deferred" ? "deferred" : "stop" };
   }
   private applyTheme(): void {
     document.documentElement.dataset.theme =
@@ -536,6 +635,29 @@ export class NotesUI {
       "Adds New chord sequence and opens chord notes in the chord editor. Stored only in this browser; notes are never changed.",
       "hint",
     );
+    const reconnectSwitch = toggle(
+      "Sync when reconnected",
+      this.reconnectEnabled,
+    );
+    reconnectSwitch.id = "sync-on-reconnect";
+    reconnectSwitch.addEventListener("click", () => {
+      const previous = this.reconnectEnabled;
+      reconnectSwitch.disabled = true;
+      void (async () => {
+        try {
+          const enabled = checked(reconnectSwitch);
+          await this.store.put(RECONNECT_SETTING, enabled);
+          this.reconnectEnabled = enabled;
+          this.updateReconnect();
+          this.reconnectChannel?.postMessage(null);
+        } catch (error) {
+          reconnectSwitch.setAttribute("aria-checked", String(previous));
+          this.error(message(error));
+        } finally {
+          reconnectSwitch.disabled = false;
+        }
+      })();
+    });
     body.append(
       section(
         "Theme",
@@ -573,6 +695,15 @@ export class NotesUI {
         ),
       ),
       section("Chord sequences", chordSwitch, chordHint),
+      section(
+        "Sync",
+        reconnectSwitch,
+        element(
+          "p",
+          "Off by default. After reconnecting, sync only while this tab is visible and unlocked. Saves first; retries are bounded. No closed-app sync. Sign-in errors require Reconnect. Stored with this browser's settings.",
+          "hint",
+        ),
+      ),
       section(
         "Images",
         element(
@@ -706,6 +837,8 @@ export class NotesUI {
     });
   }
   private reload(): void {
+    this.reconnectSync?.destroy();
+    this.reconnectChannel?.close();
     window.removeEventListener("beforeunload", this.unloadListener);
     this.session.close();
     location.reload();
@@ -779,8 +912,11 @@ export class NotesUI {
     return false;
   }
   private async eraseDevice(): Promise<void> {
+    this.reconnectSync?.cancel();
     window.removeEventListener("beforeunload", this.unloadListener);
     await this.session.forget();
+    this.reconnectSync?.destroy();
+    this.reconnectChannel?.close();
     location.reload();
   }
   /** Shows the passphrase prompt of a locked browser and resolves with the decrypted store. */
@@ -1203,6 +1339,7 @@ export class NotesUI {
       await this.saving;
     } finally {
       this.saving = undefined;
+      this.updateReconnect();
     }
   }
   private async savePending(options: { ifAvailable?: boolean }): Promise<void> {
@@ -1224,9 +1361,13 @@ export class NotesUI {
     }, options);
     this.status(this.dirty ? "Unsaved changes" : "Saved in this browser");
   }
-  private async run(action: () => Promise<void>): Promise<void> {
-    if (this.busy) return;
+  private async run(
+    action: () => Promise<void>,
+    automatic = false,
+  ): Promise<"complete" | "deferred" | "failed"> {
+    if (this.busy) return "deferred";
     this.busy = true;
+    this.updateReconnect();
     this.get<HTMLFieldSetElement>("#workspace").disabled = true;
     this.setEditable(false);
     this.get("#error").hidden = true;
@@ -1234,9 +1375,13 @@ export class NotesUI {
     try {
       await this.save({ ifAvailable: true });
       await exclusive(action, { ifAvailable: true });
+      return "complete";
     } catch (error) {
       this.status(this.dirty ? "Unsaved changes" : "Action not completed");
       this.error(message(error));
+      return automatic && error instanceof TreeBusyError
+        ? "deferred"
+        : "failed";
     } finally {
       this.busy = false;
       this.get<HTMLFieldSetElement>("#workspace").disabled = false;
@@ -1244,6 +1389,7 @@ export class NotesUI {
       this.chrome();
       if (this.get("#status").textContent === "Working...")
         this.status(this.dirty ? "Unsaved changes" : "Ready");
+      this.updateReconnect();
     }
   }
   private async openRoot(): Promise<void> {
@@ -1450,6 +1596,7 @@ export class NotesUI {
     await vault.save(account.id, tokens);
     await this.store.forgetAccount(fresh.id);
     this.remotes.delete(account.id);
+    this.autoStopped.delete(account.id);
     this.status("Account reconnected");
   }
   private async disconnect(account: Account): Promise<void> {
@@ -1476,6 +1623,7 @@ export class NotesUI {
     }
     this.remotes.delete(account.id);
     this.health.delete(account.id);
+    this.autoStopped.delete(account.id);
     await this.refresh();
   }
   private async connect(provider: Account["provider"]): Promise<void> {
@@ -1579,17 +1727,23 @@ export class NotesUI {
     }
     return remote;
   }
-  private async sync(): Promise<void> {
+  private async sync(automatic = false): Promise<ReconnectResult> {
     if (!navigator.onLine) {
       this.status(
         "Offline: changes are saved locally. Use Sync now when connected.",
       );
-      return;
+      return { state: "deferred" };
     }
-    const accounts = await this.store.accounts();
+    const accounts = (await this.store.accounts()).filter(
+      (account) => !automatic || !this.autoStopped.has(account.id),
+    );
     if (!accounts.length) {
-      this.status("Connect a drive to sync");
-      return;
+      this.status(
+        this.autoStopped.size
+          ? "Automatic sync stopped for failed drives. Use Sync now or Reconnect."
+          : "Connect a drive to sync",
+      );
+      return { state: "stop" };
     }
     this.status("Syncing...");
     this.root.classList.add("syncing");
@@ -1598,8 +1752,21 @@ export class NotesUI {
         this.store,
         accounts.map((account) => ({ account, remote: this.remote(account) })),
       );
-      for (const [id, r] of results)
+      const transient: SyncFailure[] = [];
+      for (const [id, r] of results) {
         this.health.set(id, r.errors.length ? "error" : "ok");
+        if (!r.errors.length) {
+          this.autoStopped.delete(id);
+          continue;
+        }
+        const failures: SyncFailure[] =
+          r.failures?.length === r.errors.length
+            ? r.failures
+            : [{ kind: "permanent" }];
+        if (failures.some((failure) => failure.kind !== "transient"))
+          this.autoStopped.add(id);
+        else transient.push(...failures);
+      }
       const errors = [...results.entries()].flatMap(([id, r]) =>
         r.errors.map(
           (e) => `${accounts.find((a) => a.id === id)?.label}: ${e}`,
@@ -1614,6 +1781,19 @@ export class NotesUI {
         `Sync finished${copies.length ? `: newest versions kept, older ones saved as ${copies.join(", ")} (see Conflicts)` : ""}${errors.length ? ` with ${errors.length} error(s)` : ""}`,
       );
       if (errors.length) this.error(errors.join("\n"));
+      if (transient.length)
+        return {
+          state: "retry",
+          retryAt: Math.max(
+            ...transient.map((failure) => failure.retryAt ?? 0),
+          ),
+        };
+      return {
+        state:
+          errors.length || (automatic && this.autoStopped.size)
+            ? "stop"
+            : "complete",
+      };
     } finally {
       this.root.classList.remove("syncing");
     }
@@ -1702,12 +1882,14 @@ export class NotesUI {
     if (this.chordEditor?.dirty)
       throw new Error("Add or discard the unfinished chord before updating.");
     this.busy = true;
+    this.updateReconnect();
     this.get<HTMLFieldSetElement>("#workspace").disabled = true;
     this.setEditable(false);
     const resume = () => {
       this.busy = false;
       this.get<HTMLFieldSetElement>("#workspace").disabled = false;
       this.setEditable(!!this.current);
+      this.updateReconnect();
     };
     try {
       const locks = await navigator.locks.query();
@@ -1725,6 +1907,12 @@ export class NotesUI {
   }
   destroy(): void {
     this.disposed = true;
+    this.reconnectSync?.destroy();
+    this.reconnectChannel?.close();
+    document.removeEventListener("visibilitychange", this.reconnectListener);
+    document.removeEventListener("click", this.draftListener);
+    document.removeEventListener("input", this.draftListener);
+    document.removeEventListener("close", this.draftListener, true);
     window.removeEventListener("online", this.networkListener);
     window.removeEventListener("offline", this.networkListener);
     clearTimeout(this.timer);

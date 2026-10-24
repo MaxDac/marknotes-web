@@ -563,6 +563,7 @@ test("@ note links and local images", async ({ page }) => {
   await create(page, "New note", "Plan.md");
   const editor = page.getByRole("textbox", { name: "Markdown editor" });
   await editor.fill("The plan");
+  await expect(page.locator("#status")).toHaveText("Saved in this browser");
   await create(page, "New note", "Index.md");
   await editor.click();
   await page.keyboard.type("See @pla");
