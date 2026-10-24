@@ -433,7 +433,10 @@ export class Session {
         ],
       };
     } else writes = {};
-    const tx = this.db.transaction([...STORES, "sealed", "meta"], "readwrite");
+    const tx = this.db.transaction(
+      [...STORES, "sealed", "meta"] as const,
+      "readwrite",
+    );
     await Promise.all([
       ...STORES.map((s) => tx.objectStore(s).clear()),
       tx.objectStore("sealed").clear(),
