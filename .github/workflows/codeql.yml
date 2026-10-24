@@ -1,6 +1,6 @@
 name: CodeQL
 
-# Elixir is not supported by CodeQL; this covers the TypeScript assets and the workflows themselves.
+# Covers the browser TypeScript, build scripts and workflows.
 on:
   pull_request:
     branches: [main]

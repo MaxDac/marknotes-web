@@ -1,14 +1,5 @@
 version: 2
 updates:
-  - package-ecosystem: mix
-    directory: /
-    schedule:
-      interval: weekly
-    groups:
-      phoenix:
-        patterns: ["phoenix*"]
-    open-pull-requests-limit: 10
-
   - package-ecosystem: npm
     directory: /assets
     schedule:

@@ -1,6 +1,6 @@
 # MarkNotes Web
 
-Web markdown notes app built with Phoenix LiveView, with folders and sync to Dropbox and
+Browser-only markdown notes PWA built with TypeScript and Vite, served by Caddy, with folders and sync to Dropbox and
 OneDrive. It is the web sibling of the Android app [MaxDac/MarkNotes](https://github.com/MaxDac/MarkNotes) and the desktop app
 [MaxDac/marknotes-electron](https://github.com/MaxDac/marknotes-electron). It uses the Android format-1 sync layout.
 
@@ -20,7 +20,7 @@ the automated provider tests.
 
 - **Notes stay in your browser**: stored in IndexedDB as a tree of folders and `.md` notes. You can create, open, rename,
   delete and move notes and folders, and a sidebar shows the folder tree. Note content is never sent to the MarkNotes server.
-  The UI needs a live server connection (LiveView), but your data persists locally.
+  There is no persistent server connection. After offline preparation succeeds, you can reopen and edit without a network.
 - **Editor**: raw markdown (CodeMirror 6) with a client-side preview (tables, strikethrough, task lists, highlighted code
   blocks). It has a formatting toolbar, continues lists, checkboxes and quotes on Enter, and autosaves.
 - **Note links**: type `@` to pick a note from a panel listing every note's title, path and stable id (with a copy
@@ -41,7 +41,7 @@ the automated provider tests.
   accessible components, no native prompts or selects). **Settings** offers theme System, Light or Dark, and an accent
   colour from 9 palettes.
 - **Multi-drive two-way sync** with any number of Dropbox and OneDrive accounts. Sync runs in the browser,
-  on load and on **Sync now**. The sync algorithm (planning, three-way merge, newest-wins conflicts, manifest,
+  on load when online and on **Sync now**. The sync algorithm (planning, three-way merge, newest-wins conflicts, manifest,
   multi-drive scheduling) comes from the shared core [marknotes-sync](https://github.com/MaxDac/marknotes-sync)
   (`@marknotes/sync`, Rust compiled to WebAssembly), the same core the Android and desktop apps use; the web app only
   does the I/O. A note changed on both sides is three-way merged; if the edits overlap, the newest version wins and the
@@ -56,7 +56,25 @@ the automated provider tests.
   expiry; Microsoft SSO is attempted for renewal, and **Reconnect** is required if third-party-cookie/session restrictions
   prevent silent sign-in. No unsupported MSAL cache serialization is used.
 
-Out of scope: search, tags, background sync, offline UI, local note encryption.
+Out of scope: search, tags, automatic reconnect sync and background sync. Follow-up scheduling research is tracked in
+[#33](https://github.com/MaxDac/marknotes-web/issues/33).
+
+### Installation, offline use and updates
+
+Install MarkNotes using your browser's install command, or use it in a normal tab. The existing manifest and icons
+identify the app; installation availability varies by browser. The first visit requires a network connection.
+Wait for **MarkNotes is ready offline** before relying on offline launch. The service worker caches only public app
+code, styles, icons and the security page; public provider IDs are cached separately for offline startup. Notes and
+drive credentials stay in the existing storage backend, never in the service worker's cache.
+
+Offline launch supports local notes and attachments already stored on this device. Passphrase-locked notes still
+require the passphrase. Memory-only notes do not survive a reload. Sign-in and drive sync require connectivity;
+reconnecting alone does not trigger sync. A network failure never means an edit was successfully synced.
+
+Updates show **Save and update** rather than automatically reloading. Add/discard any unfinished chord and close
+other MarkNotes tabs first. A failed save prevents updating. Memory-only sessions must sync and switch to persistent
+storage before updating. **Forget this device** removes the worker and caches as well as private data; revisit online
+to restore offline availability. Installing the app does not prevent browser storage eviction or replace a backup.
 
 ### Notes and cloud folders
 
@@ -94,19 +112,19 @@ the CSP allows `'wasm-unsafe-eval'` (WebAssembly compilation only, not JavaScrip
 
 ### Privacy and durability
 
-Notes, paths, provider tokens and editing events are not sent to Phoenix or stored in server sessions.
+Notes, paths, provider tokens and editing events are not sent to the app server. There are no server sessions.
 Cloud API calls go directly to the provider. OneDrive preauthenticated download URLs receive no Graph bearer header.
 Markdown preview blocks remote images, raw HTML and unsafe links; it only shows images from the local `attachments/`
 folder, as `blob:` URLs. Code blocks are highlighted locally.
-OAuth callbacks are minimal client pages, not LiveViews, and authorization parameters are filtered from Phoenix logs.
+OAuth callbacks are static client pages; Caddy access logs are not enabled, so callback queries are not persisted there.
 By default notes are kept unencrypted in IndexedDB. Provider credentials are encrypted with a key that cannot be exported,
 but that key is stored beside them. Settings › Privacy and security offers two other modes:
 - **Encrypted with a passphrase:** PBKDF2 → AES-256-GCM; names are hidden on disk. The app auto-locks after 15 idle minutes (or 5, 60, off).
-- **Memory only:** nothing is written to the browser.
+- **Memory only:** no private data is persisted; public PWA assets may still be cached.
 
 It also offers **Forget this device**. The browser may only connect to this origin and the Dropbox and Microsoft
-endpoints it syncs with (CSP `connect-src`). A `Permissions-Policy` denies device and sensor APIs, and the session
-cookie is `Secure` and `HttpOnly` in production. No mode defends against same-origin XSS while unlocked.
+endpoints it syncs with (CSP `connect-src`). A `Permissions-Policy` denies device and sensor APIs. The static server
+sets no cookies. No mode defends against same-origin XSS while unlocked.
 See [docs/security.md](docs/security.md) (threat model, why notes are not cached on the server, residual risks) and
 the in-app `/security` page. Clearing site data or browser profiles removes notes and credentials; there is no
 server-side recovery. Private browsing may limit storage. WebCrypto, IndexedDB and Web Locks support are required
@@ -117,73 +135,61 @@ server-side recovery. Private browsing may limit storage. WebCrypto, IndexedDB a
 Coding agents (and humans) should start with [AGENTS.md](AGENTS.md): CI-mirroring commands, architecture and the
 cross-app parity rules shared with the Android and desktop apps.
 
-Requirements: [Mise](https://mise.jdx.dev/) (or asdf) and the Erlang, Elixir and Node.js versions in
+Requirements: [Mise](https://mise.jdx.dev/) (or asdf) and the Node.js version in
 `.tool-versions`. Mise reads that file; `mise.toml` adds project tasks without duplicating the version pins.
 No database, Docker or cloud credentials are needed to run the local editor.
-
-On Linux, Mise may build Erlang from source. Install a C/C++ compiler, Make, Autoconf, Perl, OpenSSL development
-headers and ncurses development headers first. For example:
-
-```sh
-# Debian / Ubuntu
-sudo apt-get update
-sudo apt-get install build-essential autoconf m4 libncurses-dev libssl-dev perl
-
-# Arch Linux
-sudo pacman -S --needed base-devel ncurses openssl perl
-```
 
 From the repository root:
 
 ```sh
 git submodule update --init spec   # shared format spec and fixtures (or clone with --recurse-submodules)
 mise trust
-mise install                   # install the pinned runtimes (first Erlang build can take several minutes)
-mise run setup                 # bootstrap Hex/Rebar, install locked dependencies, build assets and compile
-mise run dev                   # rebuild and serve http://localhost:4000; Ctrl+C to stop
+mise install                   # install pinned Node
+mise run setup                 # locked npm dependencies + static build
+mise run dev                   # Vite dev server on http://localhost:4000, with asset watching
 ```
 
-`mise run build` rebuilds without starting the server. `mise run check` runs formatting, Credo, ExUnit,
-Dialyzer and the asset checks; `mise run audit` runs the dependency audits and Sobelow. `mise run e2e` builds and runs Playwright; install Chromium first as described below
+`mise run build` writes `assets/dist`. `mise run check` runs Prettier, TypeScript, ESLint and Vitest;
+`mise run audit` runs npm audit. `mise run e2e` builds and runs Playwright against Caddy; install Caddy and Chromium first
 and stop the development server because Playwright starts its own server on port 4000.
-The development server binds only to `127.0.0.1`. `curl --fail http://localhost:4000/health` checks readiness.
-Assets are built before launch, not watched; after editing client assets, rebuild and refresh the browser.
+The development server binds only to `127.0.0.1`. PWA and production header behavior must be tested against Caddy,
+not the Vite development server. Caddy's default development port is 4000 and its document root is relative to `assets`.
 
 The underlying commands remain available with the pinned runtimes active (`mise exec -- <command>` if Mise
 is not activated in your shell):
 
 ```sh
-mix setup                      # deps + assets
-mix phx.server                 # http://localhost:4000
-DROPBOX_APP_KEY=... MSAL_CLIENT_ID=... mix phx.server
-mix format --check-formatted && mix credo --strict && mix test
-mix dialyzer
+(cd assets && npm ci && npm run build)
+(cd assets && npm run dev)     # development only; no production server runtime
 (cd assets && npm run check)   # prettier, tsc, eslint, vitest
-(cd assets && npm run e2e)     # Playwright (starts the server itself)
+sh deploy/install-caddy.sh /tmp/marknotes-caddy  # Linux x86-64; verifies upstream SHA-512 checksum
+export PATH="/tmp/marknotes-caddy:$PATH"
+(cd assets && npm run contracts) # production routing/header tests
+(cd assets && npm run e2e)       # Playwright starts Caddy itself
 ```
 
-`config/runtime.exs` supplies the public Dropbox and OneDrive application IDs by default; neither is baked into the
+`assets/public-config.mjs` supplies the public Dropbox and OneDrive application IDs by default; neither is baked into the
 asset bundle. Users can choose **Connect Dropbox** or **Connect OneDrive**, sign in in the provider popup and select a
 cloud folder. The app registrations must allow the redirect URIs and permissions listed under
 [Provider registrations](#provider-registrations); configured IDs alone do not prove real-account sign-in works.
 
 Set `DROPBOX_APP_KEY` or `MSAL_CLIENT_ID` to override the corresponding default at runtime. An unset variable uses the
 default; an explicitly empty or whitespace-only value disables the provider with **not configured**. For example,
-`DROPBOX_APP_KEY= MSAL_CLIENT_ID= mix phx.server` disables both. Restart the server after changing these settings.
+`DROPBOX_APP_KEY= MSAL_CLIENT_ID= npm run dev` (in `assets`) disables both in development. The container serializes
+runtime overrides safely to `/config.json` at startup; restart it after changing settings. A bare static deployment can
+provide that file directly: `{"schema":1,"dropbox":"public-key","onedrive":"public-id"}`. Unsupported schemas or malformed
+configuration fail visibly; network failure alone permits the last valid public configuration for offline launch.
 These are public application identifiers, not client secrets or account access tokens.
-`SECRET_KEY_BASE` is mandatory in production.
-After changing client assets, run `mix assets.build` (or `cd assets && npm run build`); no asset watcher is required.
-Make sure the version-manager shims precede Windows executables on WSL (`asdf exec mix`, `asdf exec npm` if needed).
+There is no `SECRET_KEY_BASE` or other app-server secret. Node is required only to build and test.
+Make sure version-manager shims precede Windows executables on WSL (`mise exec -- npm ...` if needed).
 
 Install the E2E browser once: `cd assets && npx playwright install --with-deps chromium`.
-Playwright supplies a fake public Dropbox ID, uses network fixtures (not real accounts), and starts its own server.
+Playwright uses network fixtures (not real accounts) and starts its own Caddy server.
 The OneDrive browser fixture seeds encrypted credentials and exercises Graph downloads, conditional updates and newest-wins copies;
 MSAL configuration/login is covered with an SDK mock. These tests do not prove real provider registration/consent.
 If the host cannot install browser libraries, an isolated matching Playwright browser server can be used with
-`PLAYWRIGHT_WS_ENDPOINT=ws://127.0.0.1:3030/ npm run e2e`; the Phoenix server still starts locally.
-
-To reproduce production-mode E2E, set `MIX_ENV=prod`, `PHX_HOST=localhost`, `PORT=4000` and a throwaway `SECRET_KEY_BASE`,
-then run `mix deps.get --only prod && mix compile && mix assets.deploy` before `cd assets && npm run e2e`.
+`PLAYWRIGHT_WS_ENDPOINT=ws://127.0.0.1:3030/ npm run e2e`; Caddy still starts locally.
+All E2E runs use the production static build. Rebuild before testing changed assets.
 
 ### Icon
 
@@ -194,16 +200,17 @@ changing a master SVG, regenerate them with `cd branding && npm install --no-pac
 
 ## CI/CD
 
-- `checks.yml` (reusable) has seven checks: "Elixir (compile, format, credo, test)", "Dependencies (audit)" (`mix hex.audit`
-  for retired packages, `mix deps.audit` via mix_audit, the Sobelow security scan configured by `.sobelow-conf`, and
-  `npm audit --audit-level=high`), "Dialyzer", "Assets (prettier, tsc, eslint, vitest)", "Browser E2E (Playwright)",
+- `checks.yml` retains seven required check names. The legacy "Elixir (compile, format, credo, test)" now builds the
+  static artifact and tests production hosting contracts; "Dialyzer" validates Caddy configuration and shell scripts.
+  Their labels remain solely to preserve the existing ruleset, not to imply BEAM is still shipped. No checks are no-ops.
+  "Dependencies (audit)" runs `npm audit --audit-level=high`; the others are "Assets (prettier, tsc, eslint, vitest)", "Browser E2E (Playwright)",
   "Docker image build" and "Parity (marknotes-spec fixtures)" (`npm run parity`: every golden fixture of the
   [marknotes-spec](https://github.com/MaxDac/marknotes-spec) `spec/` submodule run against the browser code; known
   divergences are asserted to still differ).
 - `pr-ci.yml` runs them on pull requests, plus "Dependency review" (fails on high-severity vulnerable dependencies) and
   "actionlint" (workflow lint, including shellcheck of `run:` scripts).
 - `codeql.yml` runs CodeQL for `javascript-typescript` and `actions` on pull requests, pushes to `main` and weekly
-  (Elixir is not supported by CodeQL).
+  with no BEAM toolchain.
 - `dependabot-automerge.yml` enables squash auto-merge for Dependabot semver patch/minor updates; majors stay manual.
   Requires "Allow auto-merge" in the repository settings; merges still wait for the required checks.
 - `fly.yml` runs the checks on every push to `main` and deploys to Fly.io if they pass.
@@ -215,38 +222,47 @@ changing a master SVG, regenerate them with `cd branding && npm install --no-pac
   `/health` reports the deployed commit (`revision`) and, for releases, the release `version`. A job summary records the
   URL, image label, version and commit.
 
-`/health` returns `{"status": "ok", "version": ..., "revision": ...}`. The version comes from `mix.exs`, which reads the
+`/health` returns `{"status": "ok", "version": ..., "revision": ...}`. The version defaults to `assets/package.json`, overridden by the
 `APP_VERSION` Docker build argument (set by `release.yml`) and otherwise defaults to `0.1.0`; the revision is the
 `GIT_SHA` build argument (`unknown` outside a deployed image).
 
 ## Deployment and release
 
-### One-time setup
+### Existing app and deployment handoff
 
-```bash
-set -euo pipefail
-set +x
-fly apps create marknotes --org personal                # once; before merging changes that auto-deploy
-fly ips allocate-v4 --shared -a marknotes                # only if no shared IPv4 exists
-fly ips allocate-v6 -a marknotes                         # only if no IPv6 exists
-SECRET_KEY_BASE=$(openssl rand -hex 64)
-printf 'SECRET_KEY_BASE=%s\n' "$SECRET_KEY_BASE" | fly secrets import --stage -a marknotes
-unset SECRET_KEY_BASE
-fly tokens create deploy -a marknotes |
-  gh secret set FLY_API_TOKEN --repo MaxDac/marknotes-web
-```
+The migration is built/tested separately from the actual Fly cutover. Reuse the existing `marknotes` app, IPs,
+provider registrations and origin; do not run `fly launch`, recreate resources, rotate credentials, or delete old
+secrets as part of a routine deployment. The unused Phoenix secret may remain for rollback.
 
 Reuse the existing GitHub `production` environment; `deploy.yml` records the production URL there. No GitHub variables
 are required. Keep `FLY_API_TOKEN` as a repository secret so both reusable-workflow callers can forward it.
-The token is scoped to `marknotes`, not the organization; Fly's default expiry is 20 years. Rotate it by creating a
-replacement, storing it in the same GitHub secret, verifying deployment, then revoking the old token with the Fly CLI.
+The token is scoped to `marknotes`, not the organization. Any credential rotation is a separate authorized operation.
 Do not print tokens, commit them, or store them in local configuration files.
 
 The public `DROPBOX_APP_KEY` and `MSAL_CLIENT_ID` have application defaults; no provider client secrets are needed.
 Existing Fly environment values/secrets override those defaults. To use different registrations, supply runtime
 overrides through `fly secrets import --stage -a marknotes` (stdin `NAME=VALUE` pairs); these IDs are public even when
 stored as Fly secrets. Explicit empty/whitespace values disable the corresponding provider.
-Generate `SECRET_KEY_BASE` only for initial setup; preserve it on subsequent deployments.
+`SECRET_KEY_BASE` is no longer read; retain it during the initial rollout for rollback to the previous Phoenix image.
+
+### Portable container and static hosting
+
+```sh
+docker build --build-arg GIT_SHA="$(git rev-parse HEAD)" -t marknotes:local .
+docker run --rm -p 8080:8080 -e DROPBOX_APP_KEY -e MSAL_CLIENT_ID marknotes:local
+sh deploy/test-container.sh marknotes:local
+```
+
+The runtime is non-root Caddy on port 8080 plus `jq` for safe public configuration generation; it contains no Node,
+Erlang or Elixir. Fly is only the container host and TLS endpoint. The same image runs on another container platform
+without code changes. Alternatively publish `assets/dist` to a static host with equivalent CSP/privacy headers,
+JSON/Wasm MIME types, exact callback/security/health route mappings, and cache policies from `Caddyfile`.
+Do not use a blanket SPA fallback for OAuth or missing assets. Fly `[[statics]]` is not a CDN and cannot set these
+response headers, so requests go through Caddy. Hashed assets are immutable; mutable HTML, configuration and workers
+use `no-store` for HTTP while the worker explicitly caches an allowlisted public shell.
+
+Keep the same HTTPS origin to preserve IndexedDB, stored credentials and PWA identity. If the hostname changes,
+browser storage does not follow it; plan exports/re-sync and provider redirect registration changes first.
 
 Register the production redirect URIs `https://marknotes.fly.dev/oauth/dropbox` (Dropbox app) and
 `https://marknotes.fly.dev/oauth/onedrive` (Entra app, SPA platform); see [Provider registrations](#provider-registrations).
@@ -268,7 +284,10 @@ fly deploy -a marknotes --ha=false --image registry.fly.io/marknotes:<label>
 curl --fail https://marknotes.fly.dev/health             # confirm version/revision
 ```
 
-Then revert or fix on `main`; the next push to `main` deploys again.
+Then revert or fix on `main`; the next push to `main` deploys again. An installed service worker can keep serving
+the PWA after a server rollback. For an emergency rollback to Phoenix, unregister the MarkNotes worker and delete
+only its public app caches using browser developer tools, then reload online; **do not clear site data/IndexedDB**,
+which would delete unsynced notes. Coordinate this explicitly before a production rollback.
 
 ### Fly.io deployment and cost gate
 
@@ -276,14 +295,23 @@ This app needs **no database, Ecto, persistent volume or dedicated IPv4**. `fly.
 Machine in `ams`, auto-start/stop, zero minimum running Machines, HTTPS and `/health`. Both workflows pass `--ha=false`
 to avoid creating a spare Machine. The release container is non-root and contains no Node runtime.
 
-**Fly.io has no general free tier for new organizations.** Auto-stop is not a zero-cost guarantee; active LiveView
-connections may keep a Machine running, and runtime, stopped rootfs, builds and egress can be billed.
+**Fly.io has no general free tier for new organizations.** Auto-stop is not a zero-cost guarantee;
+runtime, stopped rootfs, builds and egress can be billed.
 Confirm the organization's allowances and approve possible charges **before merging**, because main automatically
-deploys. See [current pricing](https://docs.fly.io/about/pricing). A 256 MB container passed a limited five-session
-LiveView/browser smoke check (about 130 MiB container usage with both public provider IDs configured). This is not a production load guarantee;
-monitor memory after deployment and obtain approval before increasing the Machine size.
+deploys. See [current pricing](https://docs.fly.io/about/pricing). Keep the 256 MB allocation initially;
+measure production usage and obtain approval before changing Machine size. Removing sockets and serving cached code
+reduces unnecessary work, but does not prove a particular bill reduction.
 
-Once the [one-time setup](#one-time-setup) is done, do not recreate the app/registrations or rotate keys to deploy.
+Local migration smoke measurements used Linux Docker, one CPU and a 256 MiB limit for each image, with five separate
+blank browser sessions open and three `docker stats --no-stream` samples after startup. These are not Fly capacity
+or cost guarantees:
+
+| Measurement | Previous Phoenix image | Static Caddy image |
+| --- | --- | --- |
+| Uncompressed Docker image | 182.84 MiB | 23.84 MiB |
+| Container memory with five tabs | 120.6-120.8 MiB | 21.14 MiB |
+
+Do not recreate the app/registrations or rotate keys to deploy.
 If the CLI cannot see `marknotes` or the repository deploy secret, restore the correct account/organization access
 before continuing. Read-only checks and an explicitly authorized manual deployment:
 
@@ -297,14 +325,14 @@ curl --fail https://marknotes.fly.dev/health
 ```
 
 Do not race a manual deploy with the main/release workflow. After deployment, verify the expected release SHA,
-HTTPS/LiveView startup, one Machine, and both provider sign-ins interactively in your own browser.
+HTTPS/PWA startup, offline reload, one Machine, and both provider sign-ins interactively in your own browser.
 Use disposable notes in the same Android/desktop folder to verify a round-trip and that concurrent edits keep the newest
 version plus a conflicted copy. Automated mock results must not be reported as real-account sign-in success.
 
 | Secret | Where | Purpose |
 | --- | --- | --- |
 | `FLY_API_TOKEN` | GitHub repository secret | Deploy token (`fly tokens create deploy`) used by `deploy.yml`. |
-| `SECRET_KEY_BASE` | Fly secret | Phoenix secret. |
+| `SECRET_KEY_BASE` | Existing Fly secret | Unused by Caddy; retain initially for Phoenix rollback. |
 | `DROPBOX_APP_KEY` | Optional Fly runtime override | Public Dropbox app key (PKCE, no secret). Unset uses the application default; explicit blank disables Dropbox. |
 | `MSAL_CLIENT_ID` | Optional Fly runtime override | Public Microsoft Entra client ID. Unset uses the application default; explicit blank disables OneDrive. |
 
@@ -345,6 +373,6 @@ solution; see [#1](https://github.com/MaxDac/marknotes-web/issues/1). No relay o
 ## License
 
 MarkNotes is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). Commercial use is not permitted.
-Third-party dependencies remain under their own licenses; esbuild emits bundled legal notices alongside built assets.
+Third-party dependencies remain under their own licenses; Vite emits `licenses.txt` alongside built assets.
 The Proton SDK is not bundled in this release. Its current published metadata reports MIT, not the previous README's
 GPLv3 claim; verify the exact SDK/crypto versions and notices when implementing the follow-up.

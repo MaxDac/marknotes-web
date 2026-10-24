@@ -1,7 +1,7 @@
 # Security model
 
 How MarkNotes Web protects notes, why they are not kept on the server, and what it does not protect against.
-The public summary is the script-free page at [`/security`](../lib/marknotes_web/controllers/page_html/security.html.heex)
+The public summary is the script-free page at [`/security`](../assets/security.html)
 (linked from Settings › Privacy and security, the sidebar and the unlock screen). Keep the two in sync and describe
 only measures that ship.
 
@@ -12,7 +12,7 @@ only measures that ship.
 | Note text, note/folder names, images | Browser (IndexedDB or memory), the user's drives |
 | Drive OAuth tokens (Dropbox refresh token, Microsoft tokens) | Browser credential store; MSAL keeps its own cache in memory |
 | Sync state (per-drive records, three-way-merge base copies, cursors) | Browser, next to the notes |
-| App code | Served by Phoenix (Fly.io) |
+| App code | Served by Caddy (Fly.io), cached as a public offline PWA shell |
 
 Threats considered: a breached or malicious server; another person or malware reading the browser profile on disk
 (shared, lost or stolen device, backups); script injection into the page (XSS via note content, dependencies);
@@ -78,14 +78,17 @@ in `plain`. Switching modes requires that no other MarkNotes tab is open. Switch
 credentials, except device-local keys.
 
 **Forget this device** (Settings, and the unlock screen) deletes the IndexedDB database and clears localStorage,
-sessionStorage and Cache Storage for the origin. It does not touch the drives. Disconnecting the **last** drive offers
+sessionStorage and Cache Storage for the origin, and unregisters the PWA service worker. Public-cache writes and
+deletion share a Web Lock; the worker only reads caches on fetch, preventing the old controller from repopulating
+them after deletion. Other tabs receive a cache-disable message. Visit online again to restore offline readiness.
+It does not touch the drives. Disconnecting the **last** drive offers
 the same deletion as a checkbox, **Also delete the notes stored on this device** (unticked by default), mirroring the
 desktop app.
 
 ### Network and page hardening
 
-- CSP `connect-src` (`lib/marknotes_web/privacy_headers.ex`) is limited to:
-  - `'self'` and the LiveView socket origin;
+- CSP `connect-src` (`Caddyfile`) is limited to:
+  - `'self'` (no WebSocket origins);
   - `api.dropboxapi.com` and `content.dropboxapi.com`;
   - `graph.microsoft.com` and `login.microsoftonline.com`;
   - the OneDrive download hosts `*.1drv.com`, `*.microsoftpersonalcontent.com` and `*.sharepoint.com`.
@@ -97,19 +100,27 @@ desktop app.
   - `img-src 'self' data: blob:` and `font-src 'self'`.
   - `object-src 'none'`, `base-uri 'none'` and `form-action 'none'`.
   - `frame-ancestors 'self'`.
-- Headers: `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, and a
+- Headers: `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, and a
   `Permissions-Policy` that denies camera, microphone, geolocation, payment, USB and the other device/sensor APIs.
-- The Phoenix session cookie is `HttpOnly` and, in production, `Secure` (`secure_cookie: false` only in dev and test,
-  which are served over plain http). It holds only the CSRF token, never note data.
+- Caddy emits no session cookie. Pages/configuration/workers use HTTP `Cache-Control: no-store`; only content-hashed
+  assets receive a long immutable lifetime. The service worker explicitly caches public shell files for offline use.
+- Offline caching includes only app HTML, JS/CSS/Wasm, icons and the script-free security page. A separately validated,
+  schema-versioned public configuration is network-first with an offline last-known-valid fallback. Neither cache
+  contains notes, attachments from notes, credentials, provider API responses, health responses or OAuth URLs.
+- Public PWA code/config may be persisted in memory-only mode; no private working-set persistence is added.
+- Worker updates are prompted and require an awaited editor save, no unfinished chord draft and no other editing
+  tabs. Memory-only sessions refuse an update that would discard their heap. There is no automatic reload,
+  background sync, or sync triggered solely by an online event.
 - The preview is sanitised with DOMPurify. It shows no raw HTML and no remote images, only local `attachments/` as
   `blob:` URLs.
 - OAuth: Dropbox uses PKCE and Microsoft uses MSAL.js with a memory cache, both in a popup. The callback page contains
-  no request data, and Phoenix filters `code`, `state` and `token` from logs.
+  no request data. Callback authorization queries reach the static host as part of the browser redirect; Caddy
+  access logs are disabled so they are not persisted there. Infrastructure logging must preserve this property.
 
 ## Residual risks
 
 - **XSS, malicious extensions or malware** see whatever the unlocked page sees. CSP and sanitising reduce the risk of
-  XSS. Trusted Types is not enabled yet: the UI builds markup with `innerHTML` and LiveView patches the DOM. Moving
+  XSS. Trusted Types is not enabled yet: the UI builds markup with `innerHTML`. Moving
   to Trusted Types would need a policy for those sinks and is future work.
 - **Drives are not end-to-end encrypted.** The providers can read synced notes. Encrypting files on the drive would
   change the shared format (Android and desktop read the same folder) and must start in marknotes-spec.
@@ -121,6 +132,9 @@ desktop app.
 - **Memory:** JavaScript cannot reliably wipe strings. Decrypted notes may stay in the tab's heap until garbage
   collection; locking reloads the page to drop the whole heap.
 - **App code integrity** depends on the server and its supply chain, as for any web app.
+- **Offline durability:** first use and provider authentication require a network. Installation does not prevent
+  browser storage eviction/deletion or make unsynced notes recoverable. Cached application code can outlive a server
+  rollback; unregister only the worker/public caches, never clear IndexedDB to roll back the app.
 
 ## Tests
 

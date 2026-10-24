@@ -10,7 +10,7 @@ on:
         required: true
         type: string
       app-version:
-        description: Release version baked into the build (APP_VERSION). Empty keeps the mix.exs default.
+        description: Release version baked into the build (APP_VERSION). Empty keeps the assets/package.json default.
         required: false
         default: ""
         type: string
@@ -91,6 +91,9 @@ jobs:
           fi
           curl --silent --show-error --fail --retry 5 --retry-all-errors --retry-delay 5 --max-time 20 \
             --output /dev/null "$APP_URL/"
+          for path in /config.json /sw.js /security /oauth/dropbox /oauth/onedrive /site.webmanifest; do
+            curl --silent --show-error --fail --max-time 20 --output /dev/null "$APP_URL$path"
+          done
           echo "DEPLOYED_VERSION=$version" >> "$GITHUB_ENV"
           {
             echo "url=$APP_URL"

@@ -17,6 +17,16 @@ async function create(
   await submit(page, name);
 }
 test("local CRUD, editor, privacy, settings and reload", async ({ page }) => {
+  await page.route("**/config.json", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        schema: 1,
+        dropbox: "playwright-public-test-client",
+        onedrive: "",
+      }),
+    }),
+  );
   const requests: string[] = [],
     frames: string[] = [];
   page.on("request", (r) => {

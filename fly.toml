@@ -10,7 +10,6 @@ kill_signal = 'SIGTERM'
 [build]
 
 [env]
-  PHX_HOST = 'marknotes.fly.dev'
   PORT = '8080'
 
 [http_service]
@@ -29,9 +28,9 @@ kill_signal = 'SIGTERM'
     path = '/health'
 
   [http_service.concurrency]
-    type = 'connections'
-    hard_limit = 1000
-    soft_limit = 1000
+    type = 'requests'
+    hard_limit = 200
+    soft_limit = 100
 
 [[vm]]
   memory = '256mb'

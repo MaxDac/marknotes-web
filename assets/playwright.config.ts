@@ -12,19 +12,13 @@ export default defineConfig({
   },
   reporter: [["list"], ["html", { open: "never" }]],
   webServer: {
-    command: "cd .. && mix phx.server",
+    command: "npm run serve",
     url: "http://localhost:4000/health",
     reuseExistingServer: false,
     timeout: 120_000,
     env: {
-      MIX_ENV: process.env.MIX_ENV ?? "dev",
-      PHX_HOST: "localhost",
       PORT: "4000",
-      SECRET_KEY_BASE:
-        process.env.SECRET_KEY_BASE ??
-        "e2e-only-secret-key-base-not-used-anywhere-else-0123456789abcdefghijkl",
-      DROPBOX_APP_KEY: "playwright-public-test-client",
-      MSAL_CLIENT_ID: "",
+      SITE_ROOT: "dist",
     },
   },
 });
