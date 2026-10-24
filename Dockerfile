@@ -1,4 +1,4 @@
-FROM node:24.21.0-bookworm-slim AS assets
+FROM node:26.12.0-bookworm-slim AS assets
 WORKDIR /work/assets
 COPY assets/package.json assets/package-lock.json ./
 RUN npm ci --no-audit --no-fund
