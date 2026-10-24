@@ -211,6 +211,12 @@ WebAssembly build during `npm ci`; `sh deploy/install-sync-toolchain.sh` install
 production Caddy image contains neither Rust nor Node. Mise reads the Node pin; `mise.toml` adds project tasks.
 No database, Docker or cloud credentials are needed to run the local editor.
 
+Asset checks use TypeScript 7's native `tsc`, installed as the `@typescript/native` npm alias.
+The `typescript` dependency aliases `@typescript/typescript6` to provide the TypeScript 6 API required by
+typescript-eslint without replacing `tsc` (the compatibility package exposes `tsc6`). This follows Microsoft's
+[supported side-by-side setup](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/#running-side-by-side-with-typescript-6.0)
+until the linter supports TypeScript 7's API.
+
 From the repository root:
 
 ```sh
