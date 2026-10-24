@@ -369,6 +369,7 @@ export function confirmDialog(options: {
   title: string;
   text: string;
   confirm: string;
+  cancel?: string;
   danger?: boolean;
 }): Promise<boolean> {
   return new Promise((resolve) => {
@@ -386,7 +387,7 @@ export function confirmDialog(options: {
     );
     footer.append(
       button(
-        "Cancel",
+        options.cancel ?? "Cancel",
         () => {
           close();
           resolve(false);
