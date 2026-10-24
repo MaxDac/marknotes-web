@@ -2,8 +2,7 @@ name: CodeQL
 
 # Covers the browser TypeScript, build scripts and workflows.
 on:
-  pull_request:
-    branches: [main]
+  pull_request: {}
   push:
     branches: [main]
   schedule:
