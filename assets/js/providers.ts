@@ -298,7 +298,7 @@ interface GraphPage {
   "@odata.nextLink"?: string;
   "@odata.deltaLink"?: string;
 }
-/** Hosts OneDrive serves pre-authenticated downloads from; mirrored in the CSP (privacy_headers.ex). */
+/** Hosts OneDrive serves pre-authenticated downloads from; mirrored in the CSP (Caddyfile). */
 const DOWNLOAD_HOSTS = [
   ".1drv.com",
   ".microsoftpersonalcontent.com",

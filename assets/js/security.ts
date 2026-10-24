@@ -520,6 +520,6 @@ export async function forgetDevice(name = "marknotes"): Promise<void> {
   } catch {
     // Storage may be unavailable (private mode); nothing to clear.
   }
-  if (typeof caches !== "undefined")
-    for (const key of await caches.keys()) await caches.delete(key);
+  await clearOfflineApp();
 }
+import { clearOfflineApp } from "./pwa";

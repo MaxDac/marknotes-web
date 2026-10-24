@@ -161,6 +161,8 @@ export class NotesUI {
   private autoLock = AUTO_LOCK_DEFAULT;
   private accent = "violet";
   private disposed = false;
+  private ready = false;
+  private networkListener = () => this.connection(navigator.onLine);
   private mediaListener = () => this.applyTheme();
   private refs: NoteRef[] = [];
   private urls = new Map<string, string>();
@@ -484,7 +486,12 @@ export class NotesUI {
     const last = await this.store.value<string>("active-note");
     if (last) await exclusive(() => this.open(last));
     this.chrome();
-    if ((await this.store.accounts()).length) await this.run(() => this.sync());
+    this.ready = true;
+    window.addEventListener("online", this.networkListener);
+    window.addEventListener("offline", this.networkListener);
+    this.networkListener();
+    if (navigator.onLine && (await this.store.accounts()).length)
+      await this.run(() => this.sync());
   }
   private applyTheme(): void {
     document.documentElement.dataset.theme =
@@ -1562,6 +1569,12 @@ export class NotesUI {
     return remote;
   }
   private async sync(): Promise<void> {
+    if (!navigator.onLine) {
+      this.status(
+        "Offline: changes are saved locally. Use Sync now when connected.",
+      );
+      return;
+    }
     const accounts = await this.store.accounts();
     if (!accounts.length) {
       this.status("Connect a drive to sync");
@@ -1666,10 +1679,43 @@ export class NotesUI {
     if (label)
       label.textContent = connected
         ? ""
-        : "Server disconnected - reconnecting. Local data is retained.";
+        : "Offline - local editing is available. Drive sign-in and sync need a connection.";
+  }
+  async prepareUpdate(): Promise<() => void> {
+    if (!this.ready || this.busy)
+      throw new Error("Finish the current operation before updating.");
+    if (this.session.mode === "ephemeral")
+      throw new Error(
+        "Memory-only notes would be lost. Sync them and switch to persistent storage before updating.",
+      );
+    if (this.chordEditor?.dirty)
+      throw new Error("Add or discard the unfinished chord before updating.");
+    this.busy = true;
+    this.get<HTMLFieldSetElement>("#workspace").disabled = true;
+    this.setEditable(false);
+    const resume = () => {
+      this.busy = false;
+      this.get<HTMLFieldSetElement>("#workspace").disabled = false;
+      this.setEditable(!!this.current);
+    };
+    try {
+      const locks = await navigator.locks.query();
+      if (
+        (locks.held ?? []).filter((lock) => lock.name === "marknotes:session")
+          .length > 1
+      )
+        throw new Error("Close other MarkNotes tabs before updating.");
+      await this.save();
+    } catch (error) {
+      resume();
+      throw error;
+    }
+    return resume;
   }
   destroy(): void {
     this.disposed = true;
+    window.removeEventListener("online", this.networkListener);
+    window.removeEventListener("offline", this.networkListener);
     clearTimeout(this.timer);
     this.media.removeEventListener("change", this.mediaListener);
     window.removeEventListener("marknotes:error", this.errorListener);

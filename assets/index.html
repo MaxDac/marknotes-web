@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MarkNotes</title>
+    <meta name="theme-color" content="#1E5EB4" />
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <script type="module" src="/js/app.ts"></script>
+  </head>
+  <body class="app-page">
+    <main id="marknotes">
+      <p class="loading">
+        <img
+          src="/images/marknotes-mark.svg"
+          width="64"
+          height="64"
+          alt="MarkNotes"
+        />
+        Loading your browser's notes...
+      </p>
+      <noscript
+        >JavaScript and IndexedDB are required. Your notes stay in this
+        browser.</noscript
+      >
+    </main>
+    <aside id="pwa-status" aria-live="polite"></aside>
+  </body>
+</html>

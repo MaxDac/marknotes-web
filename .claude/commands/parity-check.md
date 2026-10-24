@@ -7,7 +7,7 @@ Audit cross-app parity for the MarkNotes feature: **$ARGUMENTS**.
 
 The apps share one synced drive folder and one note format:
 
-- Web: MaxDac/marknotes-web (this repo when run here) — Phoenix + browser TypeScript, logic in `assets/js/`.
+- Web: MaxDac/marknotes-web (this repo when run here) — static TypeScript PWA + Vite/Caddy, logic in `assets/js/`.
 - Android: MaxDac/MarkNotes — Kotlin/Gradle.
 - Desktop: MaxDac/marknotes-electron — Electron/TypeScript.
 - Spec: MaxDac/marknotes-spec — `note-format.md`, `features.md` (parity matrix), `fixtures/<area>/*.json`

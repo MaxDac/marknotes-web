@@ -1596,3 +1596,28 @@ a {
   padding-top: 16px;
   border-top: 1px solid var(--line);
 }
+#pwa-status:not(:empty) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex: none;
+  padding: 0.5rem 0.75rem;
+  background: var(--panel);
+  color: var(--weak);
+  border-top: 1px solid var(--line);
+  font-size: 0.8rem;
+}
+.app-page {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+.app-page #marknotes {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+#pwa-status p {
+  margin: 0;
+}
