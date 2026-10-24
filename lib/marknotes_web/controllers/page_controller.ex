@@ -9,6 +9,14 @@ defmodule MarknotesWeb.PageController do
     })
   end
 
+  # A static, script-free page describing how notes are protected. It renders no request or user data.
+  def security(conn, _params) do
+    conn
+    |> put_root_layout(false)
+    |> put_layout(false)
+    |> render(:security, page_title: "How MarkNotes protects your notes")
+  end
+
   # The body interpolates only a static verified route, never request data.
   # sobelow_skip ["XSS.SendResp"]
   def callback(conn, %{"provider" => provider}) when provider in ["dropbox", "onedrive"] do

@@ -269,7 +269,7 @@ test("OneDrive direct download, guarded writes and newest-wins reconciliation", 
       return reply({
         ...node(),
         "@microsoft.graph.downloadUrl":
-          "https://download.example.invalid/shared",
+          "https://public.bn.files.1drv.com/shared",
       });
     if (url.pathname.includes("manifest.json")) {
       if (request.method() === "PUT")
@@ -285,7 +285,7 @@ test("OneDrive direct download, guarded writes and newest-wins reconciliation", 
       });
     return reply({}, 404);
   });
-  await page.route("https://download.example.invalid/shared", async (route) => {
+  await page.route("https://public.bn.files.1drv.com/shared", async (route) => {
     expect(route.request().headers().authorization).toBeUndefined();
     await route.fulfill({ body: content });
   });
@@ -403,10 +403,9 @@ test("menus, dialogs and settings work from the keyboard", async ({ page }) => {
   await trigger.focus();
   await page.keyboard.press("ArrowDown");
   await expect(page.getByRole("menuitem", { name: "New note" })).toBeFocused();
-  await page.keyboard.press("ArrowDown");
   await expect(
     page.getByRole("menuitem", { name: "New chord sequence" }),
-  ).toBeFocused();
+  ).toHaveCount(0);
   await page.keyboard.press("ArrowDown");
   await expect(
     page.getByRole("menuitem", { name: "New folder" }),

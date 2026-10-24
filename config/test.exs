@@ -1,5 +1,8 @@
 import Config
 
+# Served over plain http: the session cookie cannot be `Secure` (it is in prod).
+config :marknotes, secure_cookie: false
+
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :marknotes, MarknotesWeb.Endpoint,

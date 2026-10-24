@@ -369,21 +369,142 @@ export function confirmDialog(options: {
   title: string;
   text: string;
   confirm: string;
+  cancel?: string;
   danger?: boolean;
 }): Promise<boolean> {
+  return confirmWithOption(options).then((result) => result !== null);
+}
+
+/**
+ * A confirmation that can also show a checkbox (`option`). Resolves to null when cancelled, else to whether the
+ * checkbox was ticked. `optionText` replaces `text` while the checkbox is ticked.
+ */
+export function confirmWithOption(options: {
+  title: string;
+  text: string;
+  confirm: string;
+  cancel?: string;
+  danger?: boolean;
+  option?: { label: string; id: string; text?: string };
+}): Promise<{ option: boolean } | null> {
   return new Promise((resolve) => {
     const { body, footer, close } = openDialog(options.title, () =>
-      resolve(false),
+      resolve(null),
     );
-    body.append(element("p", options.text));
+    const text = element("p", options.text);
+    body.append(text);
+    let box: HTMLInputElement | undefined;
+    if (options.option) {
+      const { label, id, text: alt } = options.option;
+      const row = element("label", undefined, "check");
+      box = element("input");
+      box.type = "checkbox";
+      box.id = id;
+      box.addEventListener("change", () => {
+        text.textContent = box!.checked && alt ? alt : options.text;
+      });
+      row.append(box, element("span", label));
+      body.append(row);
+    }
     const ok = button(
       options.confirm,
       () => {
         close();
-        resolve(true);
+        resolve({ option: box?.checked ?? false });
       },
       { variant: options.danger ? "danger" : "solid" },
     );
+    footer.append(
+      button(
+        options.cancel ?? "Cancel",
+        () => {
+          close();
+          resolve(null);
+        },
+        { variant: "outline" },
+      ),
+      ok,
+    );
+    ok.focus();
+  });
+}
+
+/** Password field with a label; `autocomplete` lets password managers tell current and new passphrases apart. */
+export function passwordField(
+  text: string,
+  autocomplete: "current-password" | "new-password",
+): { field: HTMLElement; input: HTMLInputElement } {
+  const field = element("div", undefined, "field"),
+    label = element("label", text),
+    input = element("input", undefined, "input");
+  input.type = "password";
+  input.id = `password-${++dialogs}`;
+  input.autocomplete = autocomplete;
+  input.spellcheck = false;
+  label.htmlFor = input.id;
+  field.append(label, input);
+  return { field, input };
+}
+
+/**
+ * Asks for the current and/or a new passphrase (typed twice) and runs `submit` inside the dialog, so errors such as
+ * a wrong passphrase are shown next to the fields. Resolves `true` once `submit` succeeds, `false` if cancelled.
+ */
+export function passphraseDialog(options: {
+  title: string;
+  text: string;
+  confirm: string;
+  current?: boolean;
+  next?: boolean;
+  danger?: boolean;
+  submit: (values: { current: string; next: string }) => Promise<void>;
+}): Promise<boolean> {
+  return new Promise((resolve) => {
+    const { body, footer, error, close } = openDialog(options.title, () =>
+      resolve(false),
+    );
+    const form = element("form", undefined, "fields");
+    const current = options.current
+      ? passwordField("Current passphrase", "current-password")
+      : undefined;
+    const next = options.next
+      ? passwordField("New passphrase", "new-password")
+      : undefined;
+    const again = options.next
+      ? passwordField("Repeat new passphrase", "new-password")
+      : undefined;
+    for (const f of [current, next, again]) if (f) form.append(f.field);
+    const ok = button(options.confirm, () => form.requestSubmit(), {
+      variant: options.danger ? "danger" : "solid",
+    });
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (next && next.input.value !== again!.input.value) {
+        showError(error, "The new passphrases do not match.");
+        again!.input.focus();
+        return;
+      }
+      ok.disabled = true;
+      showError(error, "");
+      options
+        .submit({
+          current: current?.input.value ?? "",
+          next: next?.input.value ?? "",
+        })
+        .then(() => {
+          close();
+          resolve(true);
+        })
+        .catch((e: unknown) => {
+          ok.disabled = false;
+          showError(error, e instanceof Error ? e.message : String(e));
+          (current ?? next)!.input.focus();
+        });
+    });
+    form.append(
+      Object.assign(element("button"), { type: "submit", hidden: true }),
+    );
+    body.append(element("p", options.text), form);
     footer.append(
       button(
         "Cancel",
@@ -395,6 +516,6 @@ export function confirmDialog(options: {
       ),
       ok,
     );
-    ok.focus();
+    (current ?? next)!.input.focus();
   });
 }

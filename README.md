@@ -28,13 +28,15 @@ the automated provider tests.
 - **Images**: insert PNG, JPEG, GIF or WebP images with the toolbar, paste or drag-and-drop. They are downscaled to at
   most 2048 px, stored in the root `attachments/` folder, synced to every drive, and can be cleaned up from **Settings**.
   See [marknotes-spec](https://github.com/MaxDac/marknotes-spec) (`spec/` submodule) for the shared note, link and attachment format.
-- **Chord sequences**: **New** → **New chord sequence** creates a note with `type: chords` in its front-matter. It opens in
+- **Chord sequences** (opt-in): turn on **Settings** → **Chord sequences** (off by default, stored only in this
+  browser). Then **New** → **New chord sequence** creates a note with `type: chords` in its front-matter. It opens in
   a graphical editor (ported from [ChordBuilder](https://github.com/MaxDac/ChordBuilder)) instead of the markdown editor.
   The editor shows an ordered list of guitar or bass chords with mini diagrams. You can add, edit, duplicate, delete and
   reorder chords, and each chord is built on a fretboard with fingers, tags and a note. **View as text** shows the raw
   markdown. A file that cannot be read, such as one with conflict markers, opens as text, and the parse error and its
-  line number are shown. Chord files are ordinary notes, so they sync, link and conflict like any other note. The format
-  is defined in the spec ("Chord sequences").
+  line number are shown. Chord files are ordinary notes, so they sync, link and conflict like any other note. With the
+  setting off, opening a chord sequence (for example one synced from another app) asks whether to enable chord
+  sequences; **No** leaves the note closed. The format is defined in the spec ("Chord sequences").
 - **Appearance**: a drive-style layout (sidebar folder tree, breadcrumb, toolbar, modal dialogs and menus built as custom
   accessible components, no native prompts or selects). **Settings** offers theme System, Light or Dark, and an accent
   colour from 9 palettes.
@@ -58,7 +60,7 @@ Out of scope: search, tags, background sync, offline UI, local note encryption.
 
 ### Notes and cloud folders
 
-Use **New** → **New note** / **New chord sequence** / **New folder** in the selected folder. **Rename / move** accepts a path relative to the local root.
+Use **New** → **New note** / **New chord sequence** (when enabled in Settings) / **New folder** in the selected folder. **Rename / move** accepts a path relative to the local root.
 Notes must end in `.md`; hidden names, traversal and moves into a folder's own descendants are rejected.
 The editor saves automatically and flushes before navigation or sync. Wait for **Saved in this browser** before closing
 the tab; a failed/stale save leaves the text in the editor and displays an error.
@@ -66,7 +68,9 @@ the tab; a failed/stale save leaves the text in the editor and displays an error
 Connect a drive and browse to the same folder used by Android/desktop. By default the picker creates/uses a `MarkNotes`
 child folder; uncheck that option to sync the selected folder itself. A new connection is reconciled with **Sync now**.
 All accounts mirror the same local tree; they are not independent notebooks. Disconnect removes only that connection's
-local credentials/history, not local notes or provider-side app authorization.
+local credentials/history, not local notes or provider-side app authorization. When disconnecting the last drive, the
+dialog offers **Also delete the notes stored on this device**, which also forgets this device; nothing on the drive is
+deleted.
 
 Sync follows initial listings with Dropbox cursors / Microsoft Graph delta feeds, not background polling. Per-drive
 sync records persist locally. The remote `.marknotes/manifest.json` has `format: 1`, `app: "MarkNotes"`,
@@ -95,9 +99,17 @@ Cloud API calls go directly to the provider. OneDrive preauthenticated download 
 Markdown preview blocks remote images, raw HTML and unsafe links; it only shows images from the local `attachments/`
 folder, as `blob:` URLs. Code blocks are highlighted locally.
 OAuth callbacks are minimal client pages, not LiveViews, and authorization parameters are filtered from Phoenix logs.
-The encryption key is non-extractable but is stored beside the encrypted credentials: it does **not** defend against
-same-origin XSS or protect plaintext notes. Clearing site data/browser profiles removes notes and credentials; there is
-no server-side recovery. Private browsing may limit storage. WebCrypto, IndexedDB and Web Locks support are required
+By default notes are kept unencrypted in IndexedDB. Provider credentials are encrypted with a key that cannot be exported,
+but that key is stored beside them. Settings › Privacy and security offers two other modes:
+- **Encrypted with a passphrase:** PBKDF2 → AES-256-GCM; names are hidden on disk. The app auto-locks after 15 idle minutes (or 5, 60, off).
+- **Memory only:** nothing is written to the browser.
+
+It also offers **Forget this device**. The browser may only connect to this origin and the Dropbox and Microsoft
+endpoints it syncs with (CSP `connect-src`). A `Permissions-Policy` denies device and sensor APIs, and the session
+cookie is `Secure` and `HttpOnly` in production. No mode defends against same-origin XSS while unlocked.
+See [docs/security.md](docs/security.md) (threat model, why notes are not cached on the server, residual risks) and
+the in-app `/security` page. Clearing site data or browser profiles removes notes and credentials; there is no
+server-side recovery. Private browsing may limit storage. WebCrypto, IndexedDB and Web Locks support are required
 (secure HTTPS, or localhost). Concurrent stale edits fail visibly instead of silently overwriting a newer note.
 
 ## Development

@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>{@page_title}</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href={~p"/assets/app.css"} />
+  </head>
+
+  <%!-- Deliberately script-free: this page only describes what the app does. Keep it in sync with docs/security.md. --%>
+  <body class="doc-page">
+    <main class="doc" id="security">
+      <header class="doc-header">
+        <img src={~p"/images/marknotes-mark.svg"} width="40" height="40" alt="" />
+        <div>
+          <h1>How MarkNotes protects your notes</h1>
+
+          <p class="doc-lead">
+            MarkNotes runs in your browser. The MarkNotes server delivers the app and never receives your notes.
+          </p>
+        </div>
+      </header>
+
+      <section aria-labelledby="server">
+        <h2 id="server">What the server sees</h2>
+
+        <p>
+          The server sends the app's code, a health check and the page that completes Dropbox or Microsoft sign-in.
+          It has no database and no accounts. Note content, note and folder names, images, drive tokens and edits are
+          never sent to it, and it cannot read them.
+        </p>
+
+        <p>
+          Editing, previewing, storing and syncing all happen in your browser. Sync talks directly to your drive
+          provider.
+        </p>
+
+        <p>
+          The sign-in page contains no request data, and authorization codes are filtered from server logs.
+        </p>
+      </section>
+
+      <section aria-labelledby="storage">
+        <h2 id="storage">Where your notes are kept</h2>
+
+        <p>
+          You choose how this browser keeps notes in <strong>Settings › Privacy and security</strong>:
+        </p>
+
+        <dl class="doc-modes">
+          <dt>In this browser (default)</dt>
+
+          <dd>
+            Notes, images and sync state are stored in this browser's IndexedDB storage. They stay there after the tab
+            closes, so anyone who can use this browser profile, or copy its files, can read them. Drive tokens are
+            encrypted with a key the browser will not export, but that key is stored in the same place. This stops
+            tokens being read straight from storage files. It does not stop someone who can run code in this browser.
+          </dd>
+
+          <dt>Encrypted with a passphrase</dt>
+
+          <dd>
+            <p>
+              Everything MarkNotes stores is encrypted: notes, names, images, sync state and drive tokens.
+            </p>
+
+            <ul>
+              <li>
+                Your passphrase unlocks a random 256-bit key, derived with PBKDF2-SHA-256 and 600,000 iterations.
+              </li>
+
+              <li>Each record is sealed with AES-256-GCM.</li>
+
+              <li>
+                Record names are replaced with HMAC-SHA-256 identifiers, so note and folder names are not visible on disk.
+              </li>
+
+              <li>Altered or swapped records are detected and refused.</li>
+            </ul>
+
+            <p>
+              While unlocked, your notes are decrypted in this tab's memory only. MarkNotes locks itself after 15
+              minutes without activity (5, 60 or off in Settings), and you can lock it at any time. The passphrase cannot be recovered.
+            </p>
+          </dd>
+
+          <dt>Memory only</dt>
+
+          <dd>
+            Nothing is written to this browser's storage. Notes, images and drive connections exist only while this tab
+            is open; closing or reloading it forgets them. Your synced notes stay on your drives. Use this on shared
+            or borrowed computers.
+          </dd>
+        </dl>
+
+        <p>
+          <strong>Forget this device</strong>
+          deletes everything MarkNotes stored in this browser: notes, images,
+          sync state, drive connections, passphrase data and settings. Your drives are not touched. It is available in
+          Settings, and on the unlock screen if you have forgotten your passphrase.
+        </p>
+      </section>
+
+      <section aria-labelledby="network">
+        <h2 id="network">What the app may connect to</h2>
+
+        <p>
+          A Content Security Policy blocks every other site. The app may only connect to:
+        </p>
+
+        <ul>
+          <li>the MarkNotes server;</li>
+
+          <li>the Dropbox API;</li>
+
+          <li>Microsoft Graph and Microsoft sign-in;</li>
+
+          <li>Microsoft's OneDrive download hosts.</li>
+        </ul>
+
+        <p>
+          OneDrive file downloads use pre-signed addresses, which receive no Microsoft token. MarkNotes refuses
+          addresses outside Microsoft's content hosts.
+        </p>
+
+        <p>
+          The app loads no third-party scripts, analytics or fonts. The markdown preview never loads remote images or
+          runs raw HTML: it only shows images from your own <code>attachments/</code>
+          folder. Pages are not cached and
+          send no referrer.
+        </p>
+      </section>
+
+      <section aria-labelledby="why">
+        <h2 id="why">Why notes are not kept on the server</h2>
+
+        <p>
+          A server-side copy, even one held only in memory, would let the server, and anyone who compromised it, read
+          every user's notes and drive tokens at once. Keeping notes in your browser means a server breach exposes
+          none of them.
+        </p>
+
+        <p>
+          The cost is that your browser has to protect them. Passphrase encryption and memory-only mode exist for that
+          reason.
+        </p>
+      </section>
+
+      <section aria-labelledby="limits">
+        <h2 id="limits">What this does not protect against</h2>
+
+        <ul>
+          <li>
+            Malware, malicious browser extensions or someone using this browser while MarkNotes is unlocked: they see
+            what you see.
+          </li>
+
+          <li>
+            A flaw that lets an attacker run script inside the MarkNotes page would also see your unlocked notes. The
+            Content Security Policy and preview sanitiser are there to prevent this.
+          </li>
+
+          <li>
+            Your drive provider can read the notes you sync. MarkNotes does not encrypt files on your drives, so the
+            Android and desktop apps can read the same folder.
+          </li>
+
+          <li>
+            With a passphrase, the number and approximate size of stored records are still visible on disk, but not
+            their content or names.
+          </li>
+
+          <li>
+            Notes stored before you set a passphrase are deleted when you set one. The browser may still keep old copies
+            in its storage files until it compacts them; for the strongest protection, set a passphrase or use memory
+            only before writing sensitive notes.
+          </li>
+
+          <li>
+            A forgotten passphrase cannot be reset. Forget this device, then sync your notes again from your drives;
+            anything not yet synced is lost.
+          </li>
+        </ul>
+      </section>
+
+      <footer class="doc-footer">
+        <p>
+          Found a security problem? Please report it privately through <a
+            href="https://github.com/MaxDac/marknotes-web/security/advisories/new"
+            rel="noopener noreferrer"
+          >
+            GitHub security advisories
+          </a>.
+        </p>
+
+        <p><a href="/">Back to MarkNotes</a></p>
+      </footer>
+    </main>
+  </body>
+</html>
