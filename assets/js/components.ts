@@ -383,6 +383,7 @@ export function confirmWithOption(options: {
   title: string;
   text: string;
   confirm: string;
+  cancel?: string;
   danger?: boolean;
   option?: { label: string; id: string; text?: string };
 }): Promise<{ option: boolean } | null> {
