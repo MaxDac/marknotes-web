@@ -25,6 +25,26 @@ afterEach(() => {
   store.close();
   vi.unstubAllGlobals();
 });
+describe.each([
+  ["Dropbox", Dropbox, dbAccount],
+  ["OneDrive", OneDrive, msAccount],
+] as const)("%s folder deletion", (_name, Provider, account) => {
+  it("fails before any provider request, even with a folder revision guard", async () => {
+    mock(() => {
+      throw new Error("A recursive delete must never be sent");
+    });
+    await expect(
+      new Provider(auth, account).delete({
+        path: "F",
+        id: "folder",
+        folder: true,
+        version: "",
+        tag: "etag",
+      }),
+    ).rejects.toThrow("cannot safely delete folders atomically");
+    expect(calls).toEqual([]);
+  });
+});
 function mock(handler: (url: string, init: RequestInit) => Response) {
   vi.stubGlobal(
     "fetch",
@@ -118,11 +138,10 @@ describe("Dropbox store", () => {
     const remote = new Dropbox(auth, dbAccount);
     const file = { path: "N.md", id: "id:file", folder: false, version: "r1" };
     await remote.delete(file);
-    await remote.delete({ path: "F", id: "id:dir", folder: true, version: "" });
     await remote.delete({ ...file, id: "id:gone" });
     expect(args.slice(0, 2)).toEqual([
       { path: "id:file", parent_rev: "r1" },
-      { path: "id:dir" },
+      { path: "id:gone", parent_rev: "r1" },
     ]);
     await expect(remote.delete({ ...file, id: "id:changed" })).rejects.toThrow(
       "409",
@@ -130,6 +149,46 @@ describe("Dropbox store", () => {
     await expect(remote.delete({ ...file, version: "" })).rejects.toThrow(
       "revision guard",
     );
+  });
+  it("creates planned folders without adopting a racing destination", async () => {
+    mock((url, init) => {
+      expect(url).toMatch(/create_folder_v2$/);
+      expect(JSON.parse(String(init.body))).toEqual({
+        path: "/MarkNotes/New",
+        autorename: false,
+      });
+      return json({ error_summary: "path/conflict/folder/.." }, 409);
+    });
+    await expect(new Dropbox(auth, dbAccount).mkdir("New")).rejects.toThrow(
+      "409",
+    );
+    expect(calls).toHaveLength(1);
+  });
+  it("uses create-only uploads for new notes and conflicted copies", async () => {
+    mock((url, init) => {
+      expect(url).toMatch(/upload$/);
+      const arg = JSON.parse(new Headers(init.headers).get("Dropbox-API-Arg")!);
+      expect(arg.mode).toBe("add");
+      expect(arg.autorename).toBe(false);
+      expect(arg.strict_conflict).toBe(true);
+      return json({}, 409);
+    });
+    const remote = new Dropbox(auth, dbAccount);
+    for (const path of ["new.md", "new (conflicted copy).md"])
+      await expect(remote.upload(path, "mine")).rejects.toThrow("409");
+    expect(calls).toHaveLength(2);
+  });
+  it("rejects unsupported Dropbox remote case renames without any temporary move", async () => {
+    mock(() => {
+      throw new Error("No provider request is safe");
+    });
+    await expect(
+      new Dropbox(auth, dbAccount).rename(
+        { path: "Note.md", id: "id:n", folder: false, version: "r1" },
+        "note.md",
+      ),
+    ).rejects.toThrow("does not support safe case-only remote renames");
+    expect(calls).toHaveLength(0);
   });
   it("reads the server time when the client time is missing", async () => {
     mock((url) => {
@@ -156,6 +215,62 @@ describe("Dropbox store", () => {
   });
 });
 describe("OneDrive store", () => {
+  it("creates planned folders without adopting a racing destination", async () => {
+    mock((url, init) => {
+      if (url.endsWith("/root"))
+        return json({ id: "sync", name: "root", folder: {} });
+      expect(url).toMatch(/\/sync\/children$/);
+      expect(JSON.parse(String(init.body))).toEqual({
+        name: "New",
+        folder: {},
+        "@microsoft.graph.conflictBehavior": "fail",
+      });
+      return json({}, 409);
+    });
+    const remote = new OneDrive(auth, { ...msAccount, folder: "" });
+    await expect(remote.mkdir("New")).rejects.toThrow("409");
+    expect(calls).toHaveLength(2);
+  });
+  it("uses create-only uploads for new notes and conflicted copies", async () => {
+    mock((url, init) => {
+      if (url.endsWith("/root"))
+        return json({ id: "sync", name: "root", folder: {} });
+      expect(
+        new URL(url).searchParams.get("@microsoft.graph.conflictBehavior"),
+      ).toBe("fail");
+      expect(init.method).toBe("PUT");
+      return json({}, 409);
+    });
+    const remote = new OneDrive(auth, { ...msAccount, folder: "" });
+    for (const path of ["new.md", "new (conflicted copy).md"])
+      await expect(remote.upload(path, "mine")).rejects.toThrow("409");
+    expect(calls).toHaveLength(3);
+  });
+  it("guards a case rename by eTag and never replaces the destination", async () => {
+    mock((url, init) => {
+      expect(url).toMatch(/\/items\/n$/);
+      expect(init.method).toBe("PATCH");
+      expect(new Headers(init.headers).get("If-Match")).toBe("e1");
+      expect(JSON.parse(String(init.body))).toEqual({
+        name: "note.md",
+        "@microsoft.graph.conflictBehavior": "fail",
+      });
+      return json({ id: "n", name: "note.md", cTag: "c1", eTag: "e2" });
+    });
+    const entry = {
+      path: "Note.md",
+      id: "n",
+      folder: false,
+      version: "c1",
+      tag: "e1",
+    };
+    const remote = new OneDrive(auth, msAccount);
+    expect((await remote.rename(entry, "note.md")).id).toBe("n");
+    await expect(
+      remote.rename({ ...entry, tag: undefined }, "note.md"),
+    ).rejects.toThrow("revision guard");
+    expect(calls).toHaveLength(1);
+  });
   it("handles delta parent ordering, case, cTag and guarded updates", async () => {
     mock((url, init) => {
       if (url.endsWith("/me/drive/root"))
@@ -167,6 +282,7 @@ describe("OneDrive store", () => {
           folder: {},
           parentReference: { id: "drive" },
         });
+
       if (url.endsWith("/root/delta") || url.endsWith("/checkpoint"))
         return json({
           value: [

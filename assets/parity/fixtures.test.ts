@@ -7,6 +7,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
+import { executeSafetyFixture } from "../tests/sync-safety";
 import {
   extensionFor,
   imageMarkdown,
@@ -38,6 +39,7 @@ import {
   conflictCopyName,
   merge3,
   mergeText,
+  localDeletions,
   parseManifest,
   plan,
   reconcile,
@@ -125,6 +127,11 @@ const mappings: Record<string, Mapping> = {
   "sync/plan": (input) => plan(input as Parameters<typeof plan>[0]),
   "sync/reconcile": (input) =>
     reconcile(input as Parameters<typeof reconcile>[0]),
+  "sync/executor-safety": (input) =>
+    executeSafetyFixture(input as Parameters<typeof executeSafetyFixture>[0]),
+  "sync/local-deletions": ({ local, records }) => ({
+    paths: localDeletions(local, records),
+  }),
   "sync/multi-drive": ({ driveIds, maxPasses, reports }) => {
     const scheduler = new SyncScheduler(driveIds, maxPasses);
     const order: string[] = [];
@@ -234,12 +241,12 @@ describe("marknotes-spec fixtures", () => {
         const todo = pending[`${file}::${c.name}`];
         if (todo) it.skip(`${c.name} — TODO: ${todo}`, () => {});
         else if (divergence)
-          it(`${c.name} (known divergence: ${divergence})`, () => {
-            expect(mapping(c.input)).not.toEqual(c.expected);
+          it(`${c.name} (known divergence: ${divergence})`, async () => {
+            expect(await mapping(c.input)).not.toEqual(c.expected);
           });
         else
-          it(c.name, () => {
-            expect(mapping(c.input)).toEqual(c.expected);
+          it(c.name, async () => {
+            expect(await mapping(c.input)).toEqual(c.expected);
           });
       }
     });

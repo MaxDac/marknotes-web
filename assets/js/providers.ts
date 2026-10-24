@@ -1,6 +1,7 @@
 import { Auth, ApiError, request } from "./auth";
-import { type Account, join, inside } from "./storage";
+import { type Account, join, inside, parent } from "./storage";
 import { type Content, type Entry, type Remote, ensureParents } from "./sync";
+import { foldCase } from "@marknotes/sync";
 
 export interface CloudFolder {
   path: string;
@@ -220,6 +221,17 @@ export class Dropbox implements Drive {
     );
   }
   async mkdir(path: string): Promise<Entry> {
+    await ensureParents(this, path);
+    return this.remember(
+      (
+        await this.api<{ metadata: DropboxItem }>("create_folder_v2", {
+          path: this.absolute(path),
+          autorename: false,
+        })
+      ).metadata,
+    );
+  }
+  async ensureFolder(path: string): Promise<Entry> {
     let result: DropboxItem | undefined,
       current = "";
     for (const part of path.split("/")) {
@@ -231,14 +243,18 @@ export class Dropbox implements Drive {
   }
   /** File deletes are conditional on the snapshot revision; a newer revision fails with 409 and keeps the file. */
   async delete(entry: Entry): Promise<void> {
-    if (!entry.folder && !entry.version)
+    if (entry.folder)
+      throw new Error(
+        "Dropbox cannot safely delete folders atomically without deleting unseen children; the folder and sync history were kept.",
+      );
+    if (!entry.version)
       throw new Error(
         "Dropbox omitted the revision guard; sync again before deleting.",
       );
     try {
       await this.api("delete_v2", {
         path: entry.id,
-        ...(entry.folder ? {} : { parent_rev: entry.version }),
+        parent_rev: entry.version,
       });
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 404) throw error;
@@ -256,6 +272,13 @@ export class Dropbox implements Drive {
       if (error instanceof ApiError && error.status === 404) return null;
       throw error;
     }
+  }
+  async rename(entry: Entry, toPath: string): Promise<Entry> {
+    if (entry.path === toPath)
+      throw new Error("Sync rename must change the path's case.");
+    throw new Error(
+      "Dropbox does not support safe case-only remote renames; the note and sync history were kept. Rename the drive item to a distinct name first.",
+    );
   }
   async writeManifest(text: string): Promise<void> {
     await this.createAbsolute(this.absolute(".marknotes"));
@@ -489,13 +512,20 @@ export class OneDrive implements Drive {
       },
       body: encode(content),
     });
-    if (modifiedAt !== undefined)
+    if (modifiedAt !== undefined) {
       // Preserve the edit time so other devices can tell which version is newest.
+      if (!item.eTag)
+        throw new Error(
+          "OneDrive omitted the revision guard; the edit time could not be saved safely.",
+        );
       item = await this.api<GraphItem>(
         `/me/drive/items/${encodeURIComponent(item.id)}`,
         {
           method: "PATCH",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "If-Match": item.eTag,
+          },
           body: JSON.stringify({
             fileSystemInfo: {
               lastModifiedDateTime: new Date(modifiedAt).toISOString(),
@@ -503,9 +533,31 @@ export class OneDrive implements Drive {
           }),
         },
       );
+      if (graphTime(item) !== modifiedAt)
+        throw new Error(
+          "OneDrive did not preserve the content edit time; sync again.",
+        );
+    }
     return this.itemEntry(item, path);
   }
   async mkdir(path: string): Promise<Entry> {
+    const p = parent(path);
+    const id = p ? (await this.ensureFolder(p)).id : await this.root();
+    const node = await this.api<GraphItem>(
+      `/me/drive/items/${encodeURIComponent(id)}/children`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: path.split("/").at(-1),
+          folder: {},
+          "@microsoft.graph.conflictBehavior": "fail",
+        }),
+      },
+    );
+    return this.itemEntry(node, path);
+  }
+  async ensureFolder(path: string): Promise<Entry> {
     let id = await this.root(),
       current = "",
       result: Entry | undefined;
@@ -526,14 +578,18 @@ export class OneDrive implements Drive {
   }
   /** Deletes are conditional on the snapshot eTag; a newer revision fails with 412 and keeps the item. */
   async delete(entry: Entry): Promise<void> {
-    if (!entry.folder && !entry.tag)
+    if (entry.folder)
+      throw new Error(
+        "OneDrive cannot safely delete folders atomically without deleting unseen children; the folder and sync history were kept.",
+      );
+    if (!entry.tag)
       throw new Error(
         "OneDrive omitted the revision guard; sync again before deleting.",
       );
     try {
       await this.api(`/me/drive/items/${encodeURIComponent(entry.id)}`, {
         method: "DELETE",
-        headers: entry.tag ? { "If-Match": entry.tag } : {},
+        headers: { "If-Match": entry.tag },
       });
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 404) throw error;
@@ -559,8 +615,34 @@ export class OneDrive implements Drive {
       throw error;
     }
   }
+  async rename(entry: Entry, toPath: string): Promise<Entry> {
+    if (
+      entry.path === toPath ||
+      foldCase(entry.path) !== foldCase(toPath) ||
+      parent(entry.path) !== parent(toPath)
+    )
+      throw new Error("OneDrive sync rename must change only the name's case.");
+    if (!entry.tag)
+      throw new Error(
+        "OneDrive omitted the revision guard; sync again before renaming.",
+      );
+    const item = await this.api<GraphItem>(
+      `/me/drive/items/${encodeURIComponent(entry.id)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "If-Match": entry.tag },
+        body: JSON.stringify({
+          name: toPath.split("/").at(-1),
+          "@microsoft.graph.conflictBehavior": "fail",
+        }),
+      },
+    );
+    if (item.id !== entry.id || item.name !== toPath.split("/").at(-1))
+      throw new Error("OneDrive did not confirm the case rename; sync again.");
+    return this.itemEntry(item, toPath);
+  }
   async writeManifest(text: string): Promise<void> {
-    const folder = await this.mkdir(".marknotes");
+    const folder = await this.ensureFolder(".marknotes");
     await this.api(
       `/me/drive/items/${encodeURIComponent(folder.id)}:/manifest.json:/content`,
       {

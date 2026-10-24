@@ -6,6 +6,7 @@ import {
   validateName,
   validatePath,
 } from "../js/storage";
+import { MemoryBackend } from "../js/backend";
 
 let store: Store;
 beforeEach(async () => {
@@ -54,6 +55,32 @@ describe("note tree locking", () => {
   });
 });
 describe("browser note tree", () => {
+  it("atomically rejects occupied sync folders, including Unicode aliases and virtual attachments", async () => {
+    await store.create("ſtuff", true);
+    await expect(store.createSyncFolder("stuff")).rejects.toThrow(
+      "already exists",
+    );
+    await store.createSyncFolder("attachments", "attachments-folder");
+    await expect(
+      store.createSyncFolder("attachments", "attachments-folder"),
+    ).rejects.toThrow("already exists");
+    expect(await store.value("attachments-folder")).toBe(true);
+    expect(await store.note("stuff")).toBeUndefined();
+  });
+  it("requires absence atomically for new downloads and does not create aliased parents", async () => {
+    await store.write("n.md", "new user edit");
+    await expect(store.write("n.md", "download", null)).rejects.toThrow(
+      "changed",
+    );
+    expect((await store.note("n.md"))?.text).toBe("new user edit");
+    await store.create("ſtuff", true);
+    await expect(store.write("stuff/n.md", "download", null)).rejects.toThrow(
+      "Another spelling",
+    );
+    expect(await store.note("stuff")).toBeUndefined();
+    await store.write("new.md", "download", null);
+    expect((await store.note("new.md"))?.text).toBe("download");
+  });
   it("persists exact UTF-8/newlines and creates parent folders", async () => {
     await store.write("folder/note.MD", "café\r\nnext\n");
     expect((await store.note("folder/note.MD"))?.text).toBe("café\r\nnext\n");
@@ -69,6 +96,117 @@ describe("browser note tree", () => {
     await expect(store.move("two", "two/child")).rejects.toThrow(
       "inside itself",
     );
+  });
+  it("atomically stages a copy and retry intent without overwriting a racing note", async () => {
+    const copy = { path: "copy.md", text: "loser", modifiedAt: 1234 };
+    await store.stageSyncCopy("a:copy-intents", ["intent"], copy, false);
+    expect(await store.value("a:copy-intents")).toEqual(["intent"]);
+    expect((await store.note(copy.path))?.modifiedAt).toBe(1234);
+    await expect(
+      store.stageSyncCopy(
+        "a:copy-intents",
+        ["new"],
+        { ...copy, text: "other" },
+        false,
+      ),
+    ).rejects.toThrow("conflicted copy changed");
+    expect(await store.value("a:copy-intents")).toEqual(["intent"]);
+    expect((await store.note(copy.path))?.text).toBe("loser");
+    await store.stageSyncCopy("a:copy-intents", ["retry"], copy, true);
+    expect(await store.value("a:copy-intents")).toEqual(["retry"]);
+  });
+  it("renames sync subtrees atomically, preserves edit times and remaps only one drive's history", async () => {
+    await store.write("Folder/Note.md", "text", undefined, 1234);
+    const records = [
+      {
+        path: "Folder/Note.md",
+        folder: false,
+        remoteId: "id",
+        version: "v1",
+        hash: "hash",
+        syncedAt: 5000,
+      },
+    ];
+    await store.put("a:records", records);
+    await store.put("b:records", records);
+    await store.putBase("a", "Folder/Note.md", "base");
+    await store.putBase("b", "Folder/Note.md", "other base");
+    const expected = await store.list();
+    const renamed = records.map((r) => ({ ...r, path: "folder/Note.md" }));
+    await store.commitSyncRename("a", "Folder", "folder", renamed, expected);
+    expect((await store.note("folder/Note.md"))?.modifiedAt).toBe(1234);
+    expect(await store.note("Folder/Note.md")).toBeUndefined();
+    expect(await store.value("a:records")).toEqual(renamed);
+    expect(await store.base("a", "folder/Note.md")).toBe("base");
+    expect(await store.base("a", "Folder/Note.md")).toBeUndefined();
+    expect(await store.value("b:records")).toEqual(records);
+    expect(await store.base("b", "Folder/Note.md")).toBe("other base");
+  });
+  it("does not expose a copy or journal when encrypted backend persistence fails", async () => {
+    const locked = new Store(
+      new MemoryBackend(async () => {
+        throw new Error("encrypted persistence failed");
+      }),
+    );
+    await expect(
+      locked.stageSyncCopy(
+        "a:copy-intents",
+        ["intent"],
+        { path: "copy.md", text: "loser", modifiedAt: 0 },
+        false,
+      ),
+    ).rejects.toThrow("encrypted persistence failed");
+    expect(await locked.note("copy.md")).toBeUndefined();
+    expect(await locked.value("a:copy-intents")).toBeUndefined();
+    locked.close();
+  });
+  it("uses shared Unicode folding for atomic no-clobber copy creation", async () => {
+    await store.write("s (conflicted copy).md", "occupied", undefined, 1000);
+    await expect(
+      store.stageSyncCopy(
+        "a:copy-intents",
+        ["intent"],
+        { path: "\u017f (conflicted copy).md", text: "new", modifiedAt: 1000 },
+        false,
+      ),
+    ).rejects.toThrow("another spelling");
+    expect(await store.value("a:copy-intents")).toBeUndefined();
+    expect((await store.note("s (conflicted copy).md"))?.text).toBe("occupied");
+  });
+  it("verifies a metadata-only rename target without rewriting its note", async () => {
+    await store.write("note.md", "one", undefined, 1234);
+    await store.putBase("a", "Note.md", "base");
+    const expected = await store.list();
+    await store.commitSyncRename("a", "Note.md", "note.md", [], expected, true);
+    expect(await store.note("note.md")).toEqual(expected[0]);
+    expect(await store.base("a", "note.md")).toBe("base");
+    expect(await store.base("a", "Note.md")).toBeUndefined();
+  });
+  it("rejects concurrent edits and collisions during sync renames without migrating history", async () => {
+    await store.write("Note.md", "old", undefined, 1000);
+    const expected = await store.list();
+    await store.write("Note.md", "edited", undefined, 2000);
+    await expect(
+      store.commitSyncRename("a", "Note.md", "note.md", [], expected),
+    ).rejects.toThrow("changed while renaming");
+    const current = await store.list();
+    await store.write("note.md", "occupied", undefined, 3000);
+    await expect(
+      store.commitSyncRename("a", "Note.md", "note.md", [], current),
+    ).rejects.toThrow("destination already exists");
+    expect((await store.note("Note.md"))?.text).toBe("edited");
+    expect((await store.note("note.md"))?.text).toBe("occupied");
+    expect(await store.value("a:records")).toBeUndefined();
+  });
+  it("never recursively deletes an unplanned local child", async () => {
+    await store.write("folder/ignored.txt.md", "preserve");
+    await expect(store.deleteEmptyFolder("folder")).rejects.toThrow(
+      "not empty",
+    );
+    expect((await store.note("folder/ignored.txt.md"))?.text).toBe("preserve");
+    await store.delete("folder/ignored.txt.md");
+    await store.deleteEmptyFolder("folder");
+    expect(await store.note("folder")).toBeUndefined();
   });
   it("rejects collisions and stale writes without replacing data", async () => {
     const first = await store.write("n.md", "one");

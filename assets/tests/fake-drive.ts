@@ -1,4 +1,5 @@
 import type { Content, Entry, Remote } from "../js/sync";
+import { foldCase } from "@marknotes/sync";
 export class FakeDrive implements Remote {
   data = new Map<
     string,
@@ -32,6 +33,11 @@ export class FakeDrive implements Remote {
     modifiedAt = Date.now(),
   ): Promise<Entry> {
     const old = this.data.get(path);
+    if (
+      !previous &&
+      [...this.data.keys()].some((p) => foldCase(p) === foldCase(path))
+    )
+      throw new Error("Revision conflict");
     if (this.failing.has(path)) throw new Error("Upload failed");
     if (old && old.entry.version !== previous?.version)
       throw new Error("Revision conflict");
@@ -52,23 +58,59 @@ export class FakeDrive implements Remote {
     return entry;
   }
   async mkdir(path: string): Promise<Entry> {
+    if ([...this.data.keys()].some((p) => foldCase(p) === foldCase(path)))
+      throw new Error("Destination already exists");
+    return this.ensureFolder(path);
+  }
+  async ensureFolder(path: string): Promise<Entry> {
     const old = this.data.get(path);
-    if (old) return old.entry;
+    if (old) {
+      if (!old.entry.folder) throw new Error("A file blocks the cloud folder.");
+      return old.entry;
+    }
     const entry = { path, id: crypto.randomUUID(), folder: true, version: "" };
     this.data.set(path, { entry, text: "" });
     return entry;
   }
   /** Like the real drives, file deletes are conditional on the snapshot revision. */
   async delete(entry: Entry): Promise<void> {
+    if (
+      entry.folder &&
+      [...this.data.keys()].some((p) => p.startsWith(`${entry.path}/`))
+    )
+      throw new Error("Folder is not empty");
     const current = this.data.get(entry.path);
-    if (current && !entry.folder && current.entry.version !== entry.version)
+    if (
+      current &&
+      (current.entry.id !== entry.id ||
+        (!entry.folder && current.entry.version !== entry.version))
+    )
       throw new Error("Revision conflict");
-    for (const path of this.data.keys())
-      if (path === entry.path || path.startsWith(`${entry.path}/`))
-        this.data.delete(path);
+    this.data.delete(entry.path);
   }
   async readManifest(): Promise<string | null> {
     return this.manifest;
+  }
+  async rename(entry: Entry, toPath: string): Promise<Entry> {
+    const old = this.data.get(entry.path);
+    if (
+      !old ||
+      old.entry.id !== entry.id ||
+      old.entry.version !== entry.version
+    )
+      throw new Error("Revision conflict");
+    if (this.data.has(toPath)) throw new Error("Destination already exists");
+    for (const path of [...this.data.keys()]) {
+      if (path !== entry.path && !path.startsWith(`${entry.path}/`)) continue;
+      const value = this.data.get(path)!;
+      this.data.delete(path);
+      const target = toPath + path.slice(entry.path.length);
+      this.data.set(target, {
+        ...value,
+        entry: { ...value.entry, path: target },
+      });
+    }
+    return this.data.get(toPath)!.entry;
   }
   async writeManifest(text: string): Promise<void> {
     this.manifest = text;
