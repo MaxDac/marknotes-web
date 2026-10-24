@@ -4,6 +4,7 @@ import {
   InteractionRequiredAuthError,
 } from "@azure/msal-browser";
 import { Store, Vault, type Account } from "./storage";
+import { ReconnectRequired, SyncError } from "./sync-errors";
 
 export interface PublicConfig {
   dropbox: string;
@@ -14,13 +15,21 @@ interface Tokens {
   refresh?: string;
   expires: number;
 }
-export class ApiError extends Error {
+export class ApiError extends SyncError {
   constructor(
     public status: number,
     provider: string,
   ) {
     super(
       `${provider} request failed (${status}). ${status === 401 ? "Reconnect this account." : status === 409 || status === 412 ? "Remote data changed; sync again." : "Please retry."}`,
+      {
+        kind:
+          status === 401 || status === 403
+            ? "authentication"
+            : status >= 500
+              ? "transient"
+              : "permanent",
+      },
     );
   }
 }
@@ -30,13 +39,27 @@ export async function request(
   init: RequestInit = {},
 ): Promise<Response> {
   for (let attempt = 0; ; attempt++) {
-    const response = await fetch(url, {
-      ...init,
-      signal: AbortSignal.timeout(60_000),
-      credentials: "omit",
-      referrerPolicy: "no-referrer",
-    });
-    if ((response.status === 429 || response.status === 503) && attempt < 3) {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        ...init,
+        signal: AbortSignal.timeout(60_000),
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+      });
+    } catch (error) {
+      if (
+        error instanceof TypeError ||
+        (error instanceof DOMException && error.name === "TimeoutError")
+      )
+        throw new SyncError(
+          "The drive could not be reached. Changes remain in this browser; try sync again.",
+          { kind: "transient" },
+          { cause: error },
+        );
+      throw error;
+    }
+    if (response.status === 429 || response.status === 503) {
       const retry = response.headers.get("retry-after");
       const seconds =
         retry && /^\d+$/.test(retry)
@@ -46,6 +69,11 @@ export async function request(
             : 2 ** attempt;
       if (!Number.isFinite(seconds) || seconds > 60)
         throw new Error("Provider is rate limiting requests; try sync later.");
+      if (attempt === 3)
+        throw new SyncError(
+          "Provider is temporarily unavailable or rate limiting requests; try sync later.",
+          { kind: "transient", retryAt: Date.now() + seconds * 1000 },
+        );
       await delay(seconds * 1000);
       continue;
     }
@@ -213,6 +241,10 @@ export class Auth {
       method: "POST",
       body,
     });
+    if (response.status === 400 || response.status === 401)
+      throw new ReconnectRequired(
+        "Reconnect Dropbox: authorization expired or was revoked.",
+      );
     if (!response.ok)
       throw new ApiError(response.status, "Dropbox authentication");
     const data = (await response.json()) as {
@@ -234,7 +266,7 @@ export class Auth {
       return saved.access;
     if (account.provider === "dropbox") {
       if (!saved?.refresh)
-        throw new Error("Reconnect Dropbox to renew this session.");
+        throw new ReconnectRequired("Reconnect Dropbox to renew this session.");
       const renewed = await this.dropboxToken(
         new URLSearchParams({
           grant_type: "refresh_token",
@@ -262,7 +294,7 @@ export class Auth {
             loginHint: account.label,
           });
       if (result.account.homeAccountId !== account.subject)
-        throw new Error(
+        throw new ReconnectRequired(
           "Microsoft returned a different account; reconnect the intended account.",
         );
       await this.vault.save(account.id, {
@@ -272,7 +304,7 @@ export class Auth {
       return result.accessToken;
     } catch (error) {
       if (error instanceof InteractionRequiredAuthError)
-        throw new Error(
+        throw new ReconnectRequired(
           "Reconnect OneDrive: Microsoft requires interactive sign-in.",
           { cause: error },
         );

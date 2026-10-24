@@ -177,6 +177,9 @@ test("updates wait for confirmation, save edits and preserve browser data", asyn
   await ready(page);
   await create(page);
   await saved(page, "Before update");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("switch", { name: "Sync when reconnected" }).click();
+  await page.getByRole("button", { name: "Done" }).click();
   const shellFile = new URL("../dist/index.html", import.meta.url);
   const workerFile = new URL("../dist/sw.js", import.meta.url);
   const shell = await readFile(shellFile, "utf8");
@@ -209,6 +212,8 @@ test("updates wait for confirmation, save edits and preserve browser data", asyn
     await page
       .getByRole("textbox", { name: "Markdown editor" })
       .fill("Saved by update");
+    await context.setOffline(true);
+    await context.setOffline(false);
     await page.getByRole("button", { name: "Save and update" }).click();
     await expect(
       page.getByRole("textbox", { name: "Markdown editor" }),
@@ -217,6 +222,11 @@ test("updates wait for confirmation, save edits and preserve browser data", asyn
       page.getByRole("button", { name: "Save and update" }),
     ).toHaveCount(0);
     await expect(page).toHaveTitle(`MarkNotes ${release}`);
+    await page.getByRole("button", { name: "Settings" }).click();
+    await expect(
+      page.getByRole("switch", { name: "Sync when reconnected" }),
+    ).toHaveAttribute("aria-checked", "true");
+    await page.getByRole("button", { name: "Done" }).click();
     await context.setOffline(true);
     await page.reload();
     await expect(page).toHaveTitle(`MarkNotes ${release}`);

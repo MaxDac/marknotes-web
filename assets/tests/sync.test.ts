@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseManifest } from "@marknotes/sync";
 import { Store, type Account } from "../js/storage";
 import { SyncEngine, localTime, syncAll } from "../js/sync";
 import { isChordSequence, parseChordBody } from "../js/chords";
 import { noteBody, noteId } from "../js/notemeta";
 import { FakeDrive } from "./fake-drive";
+import { ReconnectRequired, SyncError } from "../js/sync-errors";
 let store: Store, remote: FakeDrive, engine: SyncEngine;
 const account: Account = {
   id: "a",
@@ -21,6 +22,42 @@ beforeEach(async () => {
 });
 afterEach(() => store.close());
 describe("sync engine", () => {
+  it("preserves retry classification alongside readable per-drive errors", async () => {
+    const unavailable = new FakeDrive();
+    vi.spyOn(unavailable, "snapshot").mockRejectedValue(
+      new ReconnectRequired("Reconnect this drive"),
+    );
+    vi.spyOn(remote, "snapshot").mockRejectedValue(
+      new SyncError("Provider unavailable", {
+        kind: "transient",
+        retryAt: 123,
+      }),
+    );
+    const outcomes = await syncAll(store, [
+      { account, remote },
+      { account: second, remote: unavailable },
+    ]);
+    expect(outcomes.get(account.id)).toMatchObject({
+      errors: ["Provider unavailable"],
+      failures: [{ kind: "transient", retryAt: 123 }],
+    });
+    expect(outcomes.get(second.id)).toMatchObject({
+      errors: ["Reconnect this drive"],
+      failures: [{ kind: "authentication" }],
+    });
+  });
+  it("preserves action error types and does not classify arbitrary errors as transient", async () => {
+    await store.write("Local.md", "private");
+    vi.spyOn(remote, "upload").mockRejectedValue(
+      new SyncError("upload failed", { kind: "transient" }),
+    );
+    const result = await engine.run();
+    expect(result.errors).toContain("Local.md: upload failed");
+    expect(result.failures).toContainEqual({ kind: "transient" });
+    vi.spyOn(remote, "snapshot").mockRejectedValue(new Error("bad response"));
+    const outcomes = await syncAll(store, [{ account, remote }]);
+    expect(outcomes.get(account.id)?.failures).toEqual([{ kind: "permanent" }]);
+  });
   it("uploads local notes and folders and publishes the manifest", async () => {
     await store.write("folder/n.md", "hello\n");
     expect((await engine.run()).errors).toEqual([]);

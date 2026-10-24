@@ -56,8 +56,7 @@ the automated provider tests.
   expiry; Microsoft SSO is attempted for renewal, and **Reconnect** is required if third-party-cookie/session restrictions
   prevent silent sign-in. No unsupported MSAL cache serialization is used.
 
-Out of scope: search, tags, automatic reconnect sync and background sync. Follow-up scheduling research is tracked in
-[#33](https://github.com/MaxDac/marknotes-web/issues/33).
+Out of scope: search, tags and closed-app background sync. Reconnect sync is opt-in (see below).
 
 Plain-storage tabs coordinate editing with a browser lock. If another tab has a note dialog or sync operation open,
 new actions explain the contention instead of leaving a disabled workspace labelled **Ready**. Finish
@@ -74,7 +73,52 @@ drive credentials stay in the existing storage backend, never in the service wor
 
 Offline launch supports local notes and attachments already stored on this device. Passphrase-locked notes still
 require the passphrase. Memory-only notes do not survive a reload. Sign-in and drive sync require connectivity;
-reconnecting alone does not trigger sync. A network failure never means an edit was successfully synced.
+reconnecting alone does not trigger sync unless **Settings → Sync when reconnected** is enabled.
+A network failure never means an edit was successfully synced.
+
+### Reconnect sync and background feasibility
+
+**Sync when reconnected** is off by default and stored with this browser's settings (encrypted in locked mode;
+temporary in memory-only mode). It schedules sync after an offline-to-online transition, only while the tab is
+visible and the session is unlocked. Hidden tabs defer until visible. Online events are hints, not proof that
+a drive is reachable. Launch sync and **Sync now** remain available independently of this setting.
+
+Reconnect hints are coalesced with a two-second debounce. A cycle allows one attempt and at most three retries
+after 5, 15 and 30 seconds for known transient failures, respecting a longer provider cooldown. Existing HTTP
+429/503 retries remain bounded to four requests per operation; automatic cycles cannot multiply them without
+limit. An invalid or greater-than-60-second Retry-After stops automatic retries and asks for a later manual sync.
+Busy operations, unfinished chords and updates defer automatic work; lock contention has a finite retry budget.
+Text must save successfully before any sync starts. Disabling the setting cancels pending attempts, not an
+already-started provider operation. Other tabs re-read the setting before starting automatic work.
+
+Status distinguishes local saves, pending reconnect work, syncing, failed drives and exhausted retries.
+Authentication failures stop automatic attempts for that account until explicit recovery; no automatic sign-in
+popup is opened. Successfully synced drives remain usable when another needs reconnecting. Offline edits are
+never called synced before provider success. Closing, locking, forgetting the device or changing storage mode
+does not create a persistent retry queue.
+
+| Provider / storage | Visible, unlocked foreground reconnect | Closed-app sync in this release |
+| --- | --- | --- |
+| Dropbox / plain | Opt-in; saved token can renew directly with Dropbox | Not enabled; a future worker design would need safe credential access, coordination and interruption recovery |
+| Dropbox / passphrase-locked | Opt-in after unlock | Not enabled; worker receives no decryption key |
+| Dropbox / memory-only | Opt-in for this tab's lifetime | Impossible without changing the no-persistence guarantee |
+| OneDrive / plain | Opt-in; silent renewal may require explicit Reconnect | Not enabled; MSAL's in-memory cache is not shared with a worker |
+| OneDrive / passphrase-locked | Opt-in after unlock; same silent-renewal limit | Not enabled; neither keys nor MSAL cache are persisted for workers |
+| OneDrive / memory-only | Opt-in for this tab's lifetime | Impossible without changing the no-persistence guarantee |
+
+| Browser / lifecycle | Background API feasibility (not implemented) | Supported fallback |
+| --- | --- | --- |
+| Chromium desktop / Android | One-shot Background Sync exists; Periodic Sync availability depends on browser, installation, permission and engagement | Keep the app visible for reconnect sync; reopen for launch sync or use Sync now |
+| Firefox desktop / Android | Background Sync and Periodic Sync are not generally available | Same foreground fallback |
+| Safari / iOS installed PWA | These background APIs are not generally available; installation does not remove OS suspension limits | Same foreground fallback |
+| Any hidden, suspended or closed app | Timers may be throttled or stopped; no guaranteed continuous or periodic execution | Reopen/unlock and sync |
+
+No private service-worker queue, provider proxy, server scheduler, key escrow or additional credential persistence
+is introduced. The shared sync algorithm, conflicts and on-drive formats are unchanged.
+References: [Background Sync](https://developer.mozilla.org/en-US/docs/Web/API/Background_Synchronization_API),
+[Periodic Background Sync](https://developer.mozilla.org/en-US/docs/Web/API/Web_Periodic_Background_Synchronization_API),
+[browser compatibility data](https://github.com/mdn/browser-compat-data/tree/main/api) and
+[MSAL caching](https://learn.microsoft.com/en-us/entra/msal/javascript/browser/caching).
 
 Updates show **Save and update** rather than automatically reloading. Add/discard any unfinished chord and close
 other MarkNotes tabs first. A failed save prevents updating. Memory-only sessions must sync and switch to persistent

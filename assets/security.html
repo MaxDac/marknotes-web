@@ -160,8 +160,12 @@
           You can reopen the app and edit locally stored notes offline.
           Passphrase-locked notes still require your passphrase; memory-only
           notes do not survive a reload. Sign-in and drive sync require a
-          network connection. Sync runs on launch when online and on Sync now,
-          not when the app is closed or merely reconnects.
+          network connection. Sync runs on launch when online and on Sync now.
+          Optional Sync when reconnected runs only in a visible, unlocked tab
+          after saving, with bounded retries. It is off by default and never
+          syncs while the app is closed. Sign-in-required errors need an
+          explicit reconnect; no automatic sign-in popup is opened. Pending
+          retries add no persistent private queue or worker credentials.
         </p>
         <p>
           Updates wait for your confirmation and a successful save. Close other

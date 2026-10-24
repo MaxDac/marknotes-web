@@ -109,8 +109,12 @@ desktop app.
   contains notes, attachments from notes, credentials, provider API responses, health responses or OAuth URLs.
 - Public PWA code/config may be persisted in memory-only mode; no private working-set persistence is added.
 - Worker updates are prompted and require an awaited editor save, no unfinished chord draft and no other editing
-  tabs. Memory-only sessions refuse an update that would discard their heap. There is no automatic reload,
-  background sync, or sync triggered solely by an online event.
+  tabs. Memory-only sessions refuse an update that would discard their heap. There is no automatic reload or
+  closed-app background sync. Opt-in reconnect sync runs only in a visible, unlocked tab after saving, with bounded
+  retries and the existing tree/session locks. Connectivity events are only hints. Authentication-required errors
+  require explicit recovery, never automatic popups. Pending timers are in memory, not a durable private queue;
+  workers receive no provider credentials, note data or passphrase keys. See README's provider/storage/browser
+  feasibility matrix. Disabling reconnect cancels pending attempts, not an operation already sent to a provider.
 - The preview is sanitised with DOMPurify. It shows no raw HTML and no remote images, only local `attachments/` as
   `blob:` URLs.
 - OAuth: Dropbox uses PKCE and Microsoft uses MSAL.js with a memory cache, both in a popup. The callback page contains
