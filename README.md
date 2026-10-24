@@ -59,6 +59,11 @@ the automated provider tests.
 Out of scope: search, tags, automatic reconnect sync and background sync. Follow-up scheduling research is tracked in
 [#33](https://github.com/MaxDac/marknotes-web/issues/33).
 
+Plain-storage tabs coordinate editing with a browser lock. If another tab has a note dialog or sync operation open,
+new actions explain the contention instead of leaving a disabled workspace labelled **Ready**. Finish
+or cancel the operation in that tab, then retry. Autosaves still wait safely for the lock; unsaved text is retained.
+There is no need to clear browser storage.
+
 ### Installation, offline use and updates
 
 Install MarkNotes using your browser's install command, or use it in a normal tab. The existing manifest and icons

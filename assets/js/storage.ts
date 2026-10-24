@@ -320,12 +320,21 @@ export class Store {
   }
 }
 
-export async function exclusive<T>(work: () => Promise<T>): Promise<T> {
+export async function exclusive<T>(
+  work: () => Promise<T>,
+  options: { ifAvailable?: boolean } = {},
+): Promise<T> {
   if (!navigator.locks)
     throw new Error(
       "This browser needs Web Locks support for safe editing and sync.",
     );
-  return navigator.locks.request("marknotes:tree", work);
+  return navigator.locks.request("marknotes:tree", options, (lock) => {
+    if (!lock)
+      throw new Error(
+        "Another MarkNotes tab is using your notes. Finish its operation or close that tab, then try again.",
+      );
+    return work();
+  });
 }
 
 export async function encryptWith(
