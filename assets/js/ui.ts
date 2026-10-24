@@ -64,6 +64,7 @@ import {
   type ChordSequence,
 } from "./chords";
 import { ChordEditor } from "./chord-editor";
+import { platformLinks } from "./platforms";
 import { type Mode, Session, validatePassphrase } from "./security";
 import {
   ask,
@@ -721,6 +722,15 @@ export class NotesUI {
         ),
       ),
       this.securitySettings(section, close),
+      section(
+        "MarkNotes on other platforms",
+        element(
+          "p",
+          "Use the same notes on Android and desktop. Links open in a new tab.",
+          "hint",
+        ),
+        platformLinks(),
+      ),
     );
     footer.append(button("Done", close, { variant: "solid" }));
     body.querySelector<HTMLElement>("[role=radio][aria-checked=true]")?.focus();

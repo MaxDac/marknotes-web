@@ -602,3 +602,48 @@ test("@ note links and local images", async ({ page }) => {
   );
   await expect(page.locator("#tree")).not.toContainText("attachments");
 });
+
+test("settings link to the other MarkNotes apps in a new tab", async ({
+  page,
+  context,
+}) => {
+  await context.route(/^https:\/\/(f-droid\.org|github\.com)\//, (route) =>
+    route.fulfill({ contentType: "text/html", body: "<title>peer</title>" }),
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  const list = page.getByRole("list", { name: "MarkNotes on other platforms" });
+  const links = list.getByRole("link");
+  await expect(links).toHaveCount(3);
+  const expected = [
+    [
+      "MarkNotes for Android (F-Droid)",
+      "https://f-droid.org/packages/io.github.maxdac.marknotes.libre/",
+    ],
+    [
+      "MarkNotes Pro for Android (GitHub Releases)",
+      "https://github.com/MaxDac/MarkNotes/releases",
+    ],
+    [
+      "MarkNotes Desktop (GitHub Releases)",
+      "https://github.com/MaxDac/marknotes-electron/releases",
+    ],
+  ];
+  for (const [index, [name, href]] of expected.entries()) {
+    const link = links.nth(index);
+    await expect(link).toHaveText(name);
+    await expect(link).toHaveAttribute("href", href);
+    await expect(link).toHaveAttribute("target", "_blank");
+    await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  }
+  await expect(list).not.toContainText("MarkNotes Web");
+  const [popup] = await Promise.all([
+    context.waitForEvent("page"),
+    links.nth(2).click(),
+  ]);
+  await expect(popup).toHaveURL(
+    "https://github.com/MaxDac/marknotes-electron/releases",
+  );
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page).toHaveURL(/localhost:4000\/$/);
+});
