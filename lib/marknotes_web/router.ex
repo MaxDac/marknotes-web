@@ -19,6 +19,7 @@ defmodule MarknotesWeb.Router do
     pipe_through :browser
 
     live "/", NotesLive, :index
+    get "/security", PageController, :security
   end
 
   scope "/", MarknotesWeb do

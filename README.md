@@ -95,9 +95,16 @@ Cloud API calls go directly to the provider. OneDrive preauthenticated download 
 Markdown preview blocks remote images, raw HTML and unsafe links; it only shows images from the local `attachments/`
 folder, as `blob:` URLs. Code blocks are highlighted locally.
 OAuth callbacks are minimal client pages, not LiveViews, and authorization parameters are filtered from Phoenix logs.
-The encryption key is non-extractable but is stored beside the encrypted credentials: it does **not** defend against
-same-origin XSS or protect plaintext notes. Clearing site data/browser profiles removes notes and credentials; there is
-no server-side recovery. Private browsing may limit storage. WebCrypto, IndexedDB and Web Locks support are required
+By default notes are kept unencrypted in IndexedDB. Provider credentials are encrypted with a key that cannot be exported,
+but that key is stored beside them. Settings › Privacy and security offers two other modes:
+- **Encrypted with a passphrase:** PBKDF2 → AES-256-GCM; names are hidden on disk. The app auto-locks after 15 minutes.
+- **Memory only:** nothing is written to the browser.
+
+It also offers **Forget this device**. The browser may only connect to this origin and the Dropbox and Microsoft
+endpoints it syncs with (CSP `connect-src`). No mode defends against same-origin XSS while unlocked.
+See [docs/security.md](docs/security.md) (threat model, why notes are not cached on the server, residual risks) and
+the in-app `/security` page. Clearing site data or browser profiles removes notes and credentials; there is no
+server-side recovery. Private browsing may limit storage. WebCrypto, IndexedDB and Web Locks support are required
 (secure HTTPS, or localhost). Concurrent stale edits fail visibly instead of silently overwriting a newer note.
 
 ## Development

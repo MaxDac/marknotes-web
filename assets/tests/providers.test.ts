@@ -311,7 +311,7 @@ describe("OneDrive store", () => {
         return json({
           id: "note",
           "@microsoft.graph.downloadUrl":
-            "https://download.example.invalid/note",
+            "https://public.bn.files.1drv.com/note",
         });
       expect(new Headers(init.headers).has("Authorization")).toBe(false);
       return new Response("private note");
@@ -323,6 +323,29 @@ describe("OneDrive store", () => {
       version: "",
     });
     expect(new TextDecoder().decode(bytes)).toBe("private note");
+  });
+  it("downloads only from Microsoft content hosts", async () => {
+    for (const [url, ok] of [
+      ["https://my.microsoftpersonalcontent.com/x", true],
+      ["https://contoso-my.sharepoint.com/x", true],
+      ["https://download.example.invalid/x", false],
+      ["https://1drv.com.attacker.invalid/x", false],
+      ["http://public.bn.files.1drv.com/x", false],
+    ] as const) {
+      mock((u) =>
+        new URL(u).hostname === "graph.microsoft.com"
+          ? json({ id: "n", "@microsoft.graph.downloadUrl": url })
+          : new Response("ok"),
+      );
+      const download = new OneDrive(auth, msAccount).downloadBytes({
+        id: "n",
+        path: "N.md",
+        folder: false,
+        version: "",
+      });
+      if (ok) await expect(download).resolves.toBeDefined();
+      else await expect(download).rejects.toThrow("does not trust");
+    }
   });
   it("rejects a continuation URL outside Microsoft Graph", async () => {
     mock((url) =>
