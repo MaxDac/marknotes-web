@@ -1,7 +1,7 @@
 # Runtime versions stay in .tool-versions, shared with CI.
 [tasks.setup]
 description = "Install locked frontend dependencies and build the static app"
-run = ["npm --prefix assets ci", "npm --prefix assets run build"]
+run = ["sh deploy/install-sync-toolchain.sh", "npm --prefix assets ci", "npm --prefix assets run build"]
 
 [tasks.build]
 description = "Build the portable static app"

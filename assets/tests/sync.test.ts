@@ -6,7 +6,7 @@ import { isChordSequence, parseChordBody } from "../js/chords";
 import { noteBody, noteId } from "../js/notemeta";
 import { FakeDrive } from "./fake-drive";
 import { ReconnectRequired, SyncError } from "../js/sync-errors";
-let store: Store, remote: FakeDrive, engine: SyncEngine;
+let store: Store, remote: FakeDrive, engine: SyncEngine, storeName: string;
 const account: Account = {
   id: "a",
   provider: "dropbox",
@@ -16,12 +16,24 @@ const account: Account = {
 };
 const second: Account = { ...account, id: "b", provider: "onedrive" };
 beforeEach(async () => {
-  store = await Store.open(crypto.randomUUID());
+  storeName = crypto.randomUUID();
+  store = await Store.open(storeName);
   remote = new FakeDrive();
   engine = new SyncEngine(store, account, remote);
 });
 afterEach(() => store.close());
 describe("sync engine", () => {
+  it("does not adopt an unplanned local folder appearing after the snapshot", async () => {
+    await remote.mkdir("folder");
+    remote.onSnapshot = async () => {
+      await store.write("folder/private.md", "new user note");
+    };
+    expect((await engine.run()).errors).toContain(
+      "folder: The sync folder destination already exists.",
+    );
+    expect((await store.note("folder/private.md"))?.text).toBe("new user note");
+    expect(await store.value("a:records")).toBeUndefined();
+  });
   it("preserves retry classification alongside readable per-drive errors", async () => {
     const unavailable = new FakeDrive();
     vi.spyOn(unavailable, "snapshot").mockRejectedValue(
@@ -118,7 +130,7 @@ describe("sync engine", () => {
   it("preserves modified descendants when their remote folder disappears", async () => {
     await store.write("folder/a.md", "one");
     await engine.run();
-    await remote.delete(remote.data.get("folder")!.entry);
+    remote.data.clear();
     await store.write("folder/a.md", "local edit");
     await engine.run();
     expect(remote.data.get("folder/a.md")?.text).toBe("local edit");
@@ -129,6 +141,40 @@ describe("sync engine", () => {
     await store.delete("folder");
     await engine.run();
     expect(remote.data.size).toBe(0);
+  });
+  it("preserves unseen children and folder history when a folder cannot be deleted safely", async () => {
+    await store.write("folder/a.md", "one");
+    await engine.run();
+    await store.delete("folder");
+    const snapshot = remote.snapshot.bind(remote);
+    remote.snapshot = async () => {
+      const entries = await snapshot();
+      await remote.edit("folder/unseen.md", "another device");
+      return entries;
+    };
+    const result = await engine.run();
+    expect(result.errors).toEqual(["folder: Folder is not empty"]);
+    expect(remote.data.get("folder/unseen.md")?.text).toBe("another device");
+    const records = await store.value<{ path: string }[]>("a:records");
+    expect(records?.some((r) => r.path === "folder")).toBe(true);
+    remote.snapshot = snapshot;
+    await engine.run();
+    expect((await store.note("folder/unseen.md"))?.text).toBe("another device");
+  });
+  it("does not record a planned folder if another device creates it first", async () => {
+    await store.create("folder", true);
+    const snapshot = remote.snapshot.bind(remote);
+    remote.snapshot = async () => {
+      const entries = await snapshot();
+      await remote.ensureFolder("folder");
+      return entries;
+    };
+    expect((await engine.run()).errors).toEqual([
+      "folder: Destination already exists",
+    ]);
+    expect(await store.value("a:records")).toBeUndefined();
+    remote.snapshot = snapshot;
+    expect((await engine.run()).errors).toEqual([]);
   });
   it("three-way merges edits that do not overlap", async () => {
     await store.write("n.md", "one\ntwo\nthree\n", undefined, 1000);
@@ -365,7 +411,7 @@ describe("sync engine", () => {
   it("does not delete a folder that gained a note after the plan was made", async () => {
     await store.write("f/a.md", "one");
     await engine.run();
-    await remote.delete(remote.data.get("f")!.entry);
+    remote.data.clear();
     remote.onSnapshot = async () => {
       remote.onSnapshot = undefined;
       await store.write("f/new.md", "new");
@@ -408,14 +454,13 @@ describe("sync engine", () => {
     await engine.run();
     await store.write("n.md", "mine", undefined, 2000);
     await remote.edit("n.md", "theirs", 3000);
-    const write = store.write.bind(store);
-    store.write = (path, ...rest) =>
-      path === "n (conflicted copy).md"
-        ? Promise.reject(new Error("disk full"))
-        : write(path, ...rest);
+    const stage = store.stageSyncCopy.bind(store);
+    store.stageSyncCopy = async () => {
+      throw new Error("disk full");
+    };
     expect((await engine.run()).errors).toEqual(["n.md: disk full"]);
     expect((await store.note("n.md"))?.text).toBe("mine");
-    store.write = write;
+    store.stageSyncCopy = stage;
     const result = await engine.run();
     expect(result.errors).toEqual([]);
     expect((await store.note("n.md"))?.text).toBe("theirs");
@@ -441,6 +486,262 @@ describe("sync engine", () => {
     expect(noteBody(remote.data.get("n (conflicted copy).md")!.text)).toBe(
       "mine",
     );
+    expect(await store.value("a:copy-intents")).toEqual([]);
+  });
+  it("reuses a durable copy and its id after a crash before replacing the winner", async () => {
+    await store.write("n.md", "one", undefined, 1000);
+    await engine.run();
+    await store.write("n.md", "mine", undefined, 2000);
+    await remote.edit("n.md", "theirs", 3000);
+    const stage = store.stageSyncCopy.bind(store);
+    store.stageSyncCopy = async (...args) => {
+      await stage(...args);
+      throw new Error("crash after copy commit");
+    };
+    expect((await engine.run()).errors).toContain(
+      "n.md: crash after copy commit",
+    );
+    const copy = (await store.note("n (conflicted copy).md"))!;
+    expect((await store.note("n.md"))?.text).toBe("mine");
+    store.close();
+    store = await Store.open(storeName);
+    engine = new SyncEngine(store, account, remote);
+    expect((await engine.run()).errors).toEqual([]);
+    expect((await store.note(copy.path))?.text).toBe(copy.text);
+    expect((await store.note(copy.path))?.modifiedAt).toBe(2000);
+    expect(
+      (await store.list()).filter((n) => n.path.includes("conflicted copy")),
+    ).toHaveLength(1);
+    expect(remote.data.get(copy.path)?.text).toBe(copy.text);
+    expect(await store.value("a:copy-intents")).toEqual([]);
+  });
+  it("verifies an already uploaded copy after a crash before recording its upload", async () => {
+    await store.write("n.md", "one", undefined, 1000);
+    await engine.run();
+    await store.write("n.md", "mine", undefined, 2000);
+    await remote.edit("n.md", "theirs", 3000);
+    const upload = remote.upload.bind(remote);
+    remote.upload = async (...args) => {
+      const uploaded = await upload(...args);
+      if (args[0].includes("conflicted copy"))
+        throw new Error("crash after remote copy upload");
+      return uploaded;
+    };
+    expect((await engine.run()).errors).toContain(
+      "n.md: crash after remote copy upload",
+    );
+    const copy = (await store.note("n (conflicted copy).md"))!;
+    remote.upload = upload;
+    remote.uploads = [];
+    store.close();
+    store = await Store.open(storeName);
+    expect((await new SyncEngine(store, account, remote).run()).errors).toEqual(
+      [],
+    );
+    expect(remote.uploads).toEqual([]);
+    expect((await store.note(copy.path))?.text).toBe(copy.text);
+    expect(await store.value("a:copy-intents")).toEqual([]);
+  });
+  it("preserves an edited retry copy and gives the new copy a fresh path and id", async () => {
+    await store.write("n.md", "one", undefined, 1000);
+    await engine.run();
+    await store.write("n.md", "mine", undefined, 2000);
+    await remote.edit("n.md", "theirs", 3000);
+    const stage = store.stageSyncCopy.bind(store);
+    store.stageSyncCopy = async (...args) => {
+      await stage(...args);
+      throw new Error("crash");
+    };
+    await engine.run();
+    store.stageSyncCopy = stage;
+    const old = (await store.note("n (conflicted copy).md"))!;
+    await store.write(old.path, old.text + "edited", undefined, 4000);
+    await new SyncEngine(store, account, remote).run();
+    const fresh = (await store.note("n (conflicted copy) 2.md"))!;
+    expect(noteBody(fresh.text)).toBe("mine");
+    expect(noteId(fresh.text)).not.toBe(noteId(old.text));
+    expect((await store.note(old.path))?.text).toBe(old.text + "edited");
+  });
+  it("preserves a remote retry copy with changed metadata and chooses a fresh verified copy", async () => {
+    await store.write("n.md", "mine", undefined, 2000);
+    await remote.edit("n.md", "theirs", 1000);
+    const upload = remote.upload.bind(remote);
+    remote.upload = async (...args) => {
+      const entry = await upload(...args);
+      if (args[0].includes("conflicted copy")) entry.modifiedAt = 9000;
+      return entry;
+    };
+    expect((await engine.run()).errors).toContain(
+      "n.md: The drive did not preserve the conflicted copy's path and edit time.",
+    );
+    const old = remote.data.get("n (conflicted copy).md")!;
+    remote.upload = upload;
+    expect((await new SyncEngine(store, account, remote).run()).errors).toEqual(
+      [],
+    );
+    expect(remote.data.get("n (conflicted copy).md")?.entry.modifiedAt).toBe(
+      9000,
+    );
+    const fresh = remote.data.get("n (conflicted copy) 2.md")!;
+    expect(fresh.entry.modifiedAt).toBe(1000);
+    expect(noteBody(fresh.text)).toBe("theirs");
+    expect(noteId(fresh.text)).not.toBe(noteId(old.text));
+    expect(await store.value("a:copy-intents")).toEqual([]);
+  });
+  it("verifies Dropbox's second-precision mtime without changing the durable local edit time", async () => {
+    await store.write("n.md", "mine", undefined, 2000);
+    await remote.edit("n.md", "theirs", 1234);
+    const upload = remote.upload.bind(remote);
+    remote.upload = async (path, content, previous, modifiedAt) => {
+      const result = await upload(
+        path,
+        content,
+        previous,
+        modifiedAt === undefined
+          ? undefined
+          : Math.floor(modifiedAt / 1000) * 1000,
+      );
+      if (path.includes("conflicted copy"))
+        throw new Error("crash after rounded upload");
+      return result;
+    };
+    await engine.run();
+    const copy = (await store.note("n (conflicted copy).md"))!;
+    expect(copy.modifiedAt).toBe(1234);
+    remote.upload = upload;
+    expect((await new SyncEngine(store, account, remote).run()).errors).toEqual(
+      [],
+    );
+    expect((await store.note(copy.path))?.text).toBe(copy.text);
+    expect(
+      (await store.list()).filter((n) => n.path.includes("conflicted copy")),
+    ).toHaveLength(1);
+    expect(remote.data.get(copy.path)?.entry.modifiedAt).toBe(1000);
+  });
+  it("uses zero, not sync time, for a losing version without an edit timestamp", async () => {
+    await store.write("n.md", "mine", undefined, 2000);
+    await remote.edit("n.md", "theirs", 1000);
+    remote.data.get("n.md")!.entry.modifiedAt = undefined;
+    expect((await engine.run()).errors).toEqual([]);
+    expect((await store.note("n (conflicted copy).md"))?.modifiedAt).toBe(0);
+    expect(remote.data.get("n (conflicted copy).md")?.entry.modifiedAt).toBe(0);
+  });
+  it("converges a recorded stale local spelling without changing the note's edit time", async () => {
+    await store.write("Note.md", "one", undefined, 1234);
+    await engine.run();
+    await store.put("b:records", await store.value("a:records"));
+    await store.putBase("b", "Note.md", "one");
+    await remote.rename(remote.data.get("Note.md")!.entry, "note.md");
+    expect((await engine.run()).errors).toEqual([]);
+    expect(await store.note("Note.md")).toBeUndefined();
+    expect((await store.note("note.md"))?.modifiedAt).toBe(1234);
+    expect(await store.base("a", "note.md")).toBe("one");
+    expect(await store.base("b", "Note.md")).toBe("one");
+    expect(await store.value("b:records")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "Note.md" })]),
+    );
+  });
+  it("renames a recorded stale remote spelling without adopting an unseen content revision", async () => {
+    await store.write("Note.md", "one", undefined, 1234);
+    await engine.run();
+    await store.move("Note.md", "note.md");
+    const rename = remote.rename.bind(remote);
+    remote.rename = async (...args) => {
+      const moved = await rename(...args);
+      await remote.edit("note.md", "racing edit", 3000);
+      return { ...moved, version: remote.data.get("note.md")!.entry.version };
+    };
+    expect((await engine.run()).errors).toEqual([]);
+    const records =
+      await store.value<{ path: string; version: string }[]>("a:records");
+    expect(records?.[0].path).toBe("note.md");
+    expect(records?.[0].version).not.toBe(
+      remote.data.get("note.md")?.entry.version,
+    );
+    expect((await engine.run()).errors).toEqual([]);
+    expect((await store.note("note.md"))?.text).toBe("racing edit");
+  });
+  it("converges a Unicode simple-fold stale spelling without changing content time", async () => {
+    await store.write("\u017f.md", "one", undefined, 1234);
+    await engine.run();
+    await remote.rename(remote.data.get("\u017f.md")!.entry, "s.md");
+    expect((await engine.run()).errors).toEqual([]);
+    expect(await store.note("\u017f.md")).toBeUndefined();
+    expect((await store.note("s.md"))?.text).toBe("one");
+    expect((await store.note("s.md"))?.modifiedAt).toBe(1234);
+  });
+  it("migrates old drive history when another drive already renamed the local subtree", async () => {
+    const other = new FakeDrive();
+    const targets = [
+      { account, remote },
+      { account: second, remote: other },
+    ];
+    await store.write("Work/n.md", "one", undefined, 1234);
+    await syncAll(store, targets);
+    await remote.rename(remote.data.get("Work")!.entry, "work");
+    expect((await new SyncEngine(store, account, remote).run()).errors).toEqual(
+      [],
+    );
+    await other.rename(other.data.get("Work")!.entry, "work");
+    await other.edit("work/n.md", "remote edit", 3000);
+    const before = (await store.note("work/n.md"))!;
+    const records =
+      await store.value<{ path: string; version: string }[]>("b:records");
+    const oldVersion = records?.find((r) => r.path === "Work/n.md")?.version;
+    const result = await new SyncEngine(store, second, other).run();
+    expect(result.errors).toEqual([]);
+    expect(result.changes).toBe(0);
+    expect((await store.note("work/n.md"))?.revision).toBe(before.revision);
+    expect((await store.note("work/n.md"))?.modifiedAt).toBe(1234);
+    expect(await store.base("b", "work/n.md")).toBe("one");
+    expect(await store.value("b:records")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "work/n.md", version: oldVersion }),
+      ]),
+    );
+    expect((await new SyncEngine(store, second, other).run()).errors).toEqual(
+      [],
+    );
+    expect((await store.note("work/n.md"))?.text).toBe("remote edit");
+  });
+  it("replays a completed remote rename after a crash without adopting unseen edits", async () => {
+    await store.write("Note.md", "one", undefined, 1000);
+    await engine.run();
+    const originalVersion = remote.data.get("Note.md")!.entry.version;
+    await store.move("Note.md", "note.md");
+    store.commitSyncRename = async () => {
+      throw new Error("crash before history migration");
+    };
+    expect((await engine.run()).errors).toContain(
+      "Note.md: crash before history migration",
+    );
+    expect(remote.data.has("note.md")).toBe(true);
+    expect(await store.value("a:rename-intents")).toEqual([
+      expect.objectContaining({ path: "Note.md", toPath: "note.md" }),
+    ]);
+    await store.write("note.md", "typed after crash", undefined, 3000);
+    await remote.edit("note.md", "drive after crash", 4000);
+    store.close();
+    store = await Store.open(storeName);
+    remote.readManifest = async () => {
+      expect((await store.note("note.md"))?.text).toBe("typed after crash");
+      const records =
+        await store.value<{ path: string; version: string }[]>("a:records");
+      expect(records?.[0]).toMatchObject({
+        path: "note.md",
+        version: originalVersion,
+      });
+      expect(await store.base("a", "note.md")).toBe("one");
+      return remote.manifest;
+    };
+    expect((await new SyncEngine(store, account, remote).run()).errors).toEqual(
+      [],
+    );
+    expect(await store.value("a:rename-intents")).toEqual([]);
+    expect((await store.note("note.md"))?.text).toBe("drive after crash");
+    expect(
+      noteBody((await store.note("note (conflicted copy).md"))!.text),
+    ).toBe("typed after crash");
   });
   it("keeps a byte order mark and does not rewrite downloaded bytes", async () => {
     const bytes = new Uint8Array([0xef, 0xbb, 0xbf, 0x68, 0x69]);
@@ -466,6 +767,26 @@ describe("sync engine", () => {
   });
 });
 describe("syncAll", () => {
+  it("marks deletions on every linked drive before another drive restores identical text", async () => {
+    const other = new FakeDrive();
+    const targets = [
+      { account, remote },
+      { account: second, remote: other },
+    ];
+    await store.write("n.md", "same text", undefined, 1000);
+    await syncAll(store, targets);
+    await store.delete("n.md");
+    await remote.edit("n.md", "same text", 2000);
+    other.data.delete("n.md");
+    const result = await syncAll(store, targets);
+    expect([...result.values()].flatMap((r) => r.errors)).toEqual([]);
+    expect((await store.note("n.md"))?.text).toBe("same text");
+    expect(remote.data.get("n.md")?.text).toBe("same text");
+    expect(other.data.get("n.md")?.text).toBe("same text");
+    const records =
+      await store.value<{ localDeleted?: boolean }[]>("b:records");
+    expect(records?.[0].localDeleted).not.toBe(true);
+  });
   it("requeues other drives after downloads", async () => {
     const other = new FakeDrive();
     await other.edit("new.md", "second");

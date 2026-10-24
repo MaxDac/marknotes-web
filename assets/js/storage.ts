@@ -8,6 +8,7 @@ import {
 } from "./backend";
 import { inAttachments } from "./attachments";
 import { idsToAssign, newId, newNoteText, withId } from "./notemeta";
+import { foldCase } from "@marknotes/sync";
 
 export interface Note {
   path: string;
@@ -31,6 +32,7 @@ export interface RecordState {
   version: string;
   hash: string;
   syncedAt: number;
+  localDeleted?: boolean;
 }
 /** An immutable binary file under `attachments/`, named by the SHA-256 of its bytes. */
 export interface Attachment {
@@ -133,7 +135,7 @@ export class Store {
   async write(
     path: string,
     text: string,
-    expectedRevision?: string,
+    expectedRevision?: string | null,
     modifiedAt = Date.now(),
   ): Promise<Note> {
     validatePath(path);
@@ -142,16 +144,22 @@ export class Store {
       const old = await tx.get("notes", path);
       if (
         old?.folder ||
-        (expectedRevision !== undefined && old?.revision !== expectedRevision)
+        (expectedRevision !== undefined &&
+          (old?.revision ?? null) !== expectedRevision)
       )
         throw new Error(
           "This note changed in another tab or sync. Your unsaved text is still in the editor; copy it before reopening.",
         );
       const parts = path.split("/");
       const missing: string[] = [];
+      const keys = expectedRevision === null ? await tx.keys("notes") : [];
+      if (keys.some((key) => foldCase(key) === foldCase(path)))
+        throw new Error("The sync destination already exists.");
       for (let i = 1; i < parts.length; i++) {
         const p = parts.slice(0, i).join("/");
         const existing = await tx.get("notes", p);
+        if (!existing && keys.some((key) => foldCase(key) === foldCase(p)))
+          throw new Error(`Another spelling blocks folder ${p}`);
         if (existing && !existing.folder)
           throw new Error(`A note blocks folder ${p}`);
         if (!existing) missing.push(p);
@@ -200,6 +208,51 @@ export class Store {
         if (key === path || inside(path, key)) await tx.delete("notes", key);
     });
   }
+  async createSyncFolder(path: string, marker?: string): Promise<void> {
+    validatePath(path);
+    if (!marker) reserved(path);
+    await this.change(["notes", "attachments", "values"], async (tx) => {
+      if (
+        (await tx.keys("notes")).some((key) => foldCase(key) === foldCase(path))
+      )
+        throw new Error("The sync folder destination already exists.");
+      if (marker) {
+        if (
+          (await tx.get("values", marker)) ||
+          (await tx.keys("attachments")).some((key) => inside(path, key))
+        )
+          throw new Error("The sync folder destination already exists.");
+        await tx.put("values", true, marker);
+        return;
+      }
+      const p = parent(path);
+      if (p && !(await tx.get("notes", p))?.folder)
+        throw new Error("Parent folder does not exist.");
+      await tx.add("notes", {
+        path,
+        folder: true,
+        text: "",
+        revision: crypto.randomUUID(),
+      });
+    });
+  }
+  async deleteEmptyFolder(path: string, marker?: string): Promise<void> {
+    await this.change(["notes", "attachments", "values"], async (tx) => {
+      if (marker) {
+        if ((await tx.keys("attachments")).some((p) => inside(path, p)))
+          throw new Error("Folder is not empty; its sync history was kept.");
+        await tx.delete("values", marker);
+        return;
+      }
+      const notes = await tx.getAll("notes");
+      if (notes.some((n) => inside(path, n.path)))
+        throw new Error("Folder is not empty; its sync history was kept.");
+      const note = notes.find((n) => n.path === path);
+      if (note && !note.folder)
+        throw new Error("A note now occupies the folder path.");
+      await tx.delete("notes", path);
+    });
+  }
   async move(from: string, to: string): Promise<void> {
     validatePath(to);
     reserved(to);
@@ -229,6 +282,122 @@ export class Store {
           modifiedAt: now,
         });
       }
+    });
+  }
+  /** Saves the retry intent and its copy together; a collision never replaces an existing note. */
+  async stageSyncCopy(
+    key: string,
+    pending: unknown,
+    copy: { path: string; text: string; modifiedAt: number },
+    reuse: boolean,
+  ): Promise<void> {
+    validatePath(copy.path);
+    if (!isNote(copy.path)) throw new Error("Notes must have a .md extension.");
+    await this.change(["notes", "values"], async (tx) => {
+      const existing = await tx.get("notes", copy.path);
+      if (
+        (await tx.keys("notes")).some(
+          (path) =>
+            path !== copy.path && foldCase(path) === foldCase(copy.path),
+        )
+      )
+        throw new Error(
+          "The conflicted copy destination is occupied with another spelling.",
+        );
+      if (
+        existing &&
+        (!reuse ||
+          existing.folder ||
+          existing.text !== copy.text ||
+          existing.modifiedAt !== copy.modifiedAt)
+      )
+        throw new Error(
+          "The conflicted copy changed; sync again before retrying.",
+        );
+      const p = parent(copy.path);
+      if (p && !(await tx.get("notes", p))?.folder)
+        throw new Error(
+          "The conflicted copy's parent folder no longer exists.",
+        );
+      await tx.put("values", pending, key);
+      if (!existing)
+        await tx.add("notes", {
+          ...copy,
+          folder: false,
+          revision: crypto.randomUUID(),
+        });
+    });
+  }
+  /** Commits a sync-only case rename and this drive's history without changing content edit times. */
+  async commitSyncRename(
+    account: string,
+    from: string,
+    to: string,
+    records: RecordState[],
+    expected?: Note[],
+    metadataOnly = false,
+  ): Promise<void> {
+    validatePath(to);
+    if (from === to || foldCase(from) !== foldCase(to))
+      throw new Error("Sync rename must change only the path's case.");
+    await this.change(["notes", "values"], async (tx) => {
+      if (expected) {
+        const all = await tx.getAll("notes");
+        const root = metadataOnly ? to : from;
+        const source = all.filter(
+          (n) => n.path === root || inside(root, n.path),
+        );
+        if (
+          !source.length ||
+          (metadataOnly &&
+            all.some((n) => n.path === from || inside(from, n.path))) ||
+          source.length !== expected.length ||
+          source.some(
+            (n) =>
+              !expected.some(
+                (e) => e.path === n.path && e.revision === n.revision,
+              ),
+          )
+        )
+          throw new Error("The item changed while renaming; sync again.");
+        if (!metadataOnly) {
+          const moving = new Set(source.map((n) => n.path));
+          for (const n of source) {
+            const target = to + n.path.slice(from.length);
+            if (
+              all.some(
+                (other) =>
+                  !moving.has(other.path) &&
+                  foldCase(other.path) === foldCase(target),
+              )
+            )
+              throw new Error("The rename destination already exists.");
+          }
+          const p = parent(to);
+          if (p && !all.some((n) => n.path === p && n.folder))
+            throw new Error("Destination folder does not exist.");
+          for (const n of source) await tx.delete("notes", n.path);
+          for (const n of source)
+            await tx.add("notes", {
+              ...n,
+              path: to + n.path.slice(from.length),
+              revision: crypto.randomUUID(),
+            });
+        }
+      }
+      const prefix = `${account}:base:`;
+      for (const key of await tx.keys("values")) {
+        if (!key.startsWith(prefix)) continue;
+        const path = key.slice(prefix.length);
+        if (path !== from && !inside(from, path)) continue;
+        const target = prefix + to + path.slice(from.length);
+        if ((await tx.get("values", target)) !== undefined)
+          throw new Error("The rename destination already has sync history.");
+        const value = await tx.get("values", key);
+        await tx.delete("values", key);
+        await tx.add("values", value, target);
+      }
+      await tx.put("values", records, `${account}:records`);
     });
   }
   /**

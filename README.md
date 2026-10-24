@@ -102,14 +102,34 @@ by SHA-256. A note changed in more than one place (this browser, Dropbox, OneDri
 Android/desktop apps writing to the same folder) is first three-way merged against the last synced version (kept per
 drive in this browser). If the edits overlap, **newest wins**: the version with the latest edit time is kept
 everywhere, and the other is saved as a ` (conflicted copy).md` sibling (` (conflicted copy) 2.md`, … if taken) with a
-new note id, and uploaded, so no edit is lost. The copy is saved in this browser before the note is overwritten, then
-uploaded. Local edit times are recorded per note; drive times come from Dropbox
+new note id, and uploaded, so no edit is lost. The copy and a per-drive retry journal are saved atomically in this
+browser before the note is overwritten, then uploaded. A restart replays the journal before planning, reusing only
+the verified copy's exact text, id and losing edit time rather than numbering a duplicate. A changed or occupied
+copy is preserved and a fresh copy is chosen. The journal uses the same plain, passphrase-encrypted or memory-only
+backend as the notes. Local edit times are recorded per note; drive times come from Dropbox
 `client_modified` and OneDrive `fileSystemInfo.lastModifiedDateTime` (falling back to the server time), which the web
-app sets on upload. Equal times prefer the drive's version. Results depend on device clocks being roughly correct. Edits
-survive opposing deletions: a note saved after the sync was planned is never overwritten or deleted locally (the step
+app sets on upload. Equal times prefer the drive's version. Results depend on device clocks being roughly correct.
+Dropbox timestamps have second precision; local copy journals retain the original millisecond edit time and verify
+the drive's documented rounded representation.
+Edits survive opposing deletions: a note saved after the sync was planned is never overwritten or deleted locally (the step
 waits for the next sync), and drive deletions are conditional on the revision the sync saw (Dropbox `parent_rev`,
 OneDrive `If-Match`), so a file changed elsewhere meanwhile is kept and downloaded next time. Notes are downloaded and
 hashed as bytes, so a UTF-8 byte order mark is kept and an unedited note is never rewritten on the drive.
+New files, conflicted copies and planned folders are created without replacing or adopting a destination created
+by another device after listing; a collision is reported and reconciled on the next sync. Parent-folder provisioning
+may reuse existing folders. Dropbox and OneDrive do not provide the atomic, non-recursive folder deletion this
+client requires: remote folder deletion therefore reports an error and retains the folder and its sync history,
+instead of risking deletion of an unseen child. Known unchanged files may still be deleted conditionally.
+Record-proven stale case-only spellings converge without changing content edit times. Ambiguous or edited stale
+spellings remain errors. Only the current drive's record/base paths migrate after a successful rename; revision
+and content hashes remain unchanged so a racing remote edit is detected by the next fresh plan.
+Remote renames have a durable intent before the provider call; a restart recognizes the stable item identity at
+its new spelling and completes the history migration without overwriting newer edits. If another drive already
+renamed the local tree, an unchanged target is verified and only this drive's old history moves.
+Dropbox's API does not support direct case-only remote renames. That direction fails explicitly without a
+temporary-name dance; local stale-case convergence still works. OneDrive supports guarded direct renames.
+Before planning, missing-file origins are flagged on every linked drive, so restoring identical bytes from one
+drive cannot cause another drive's old deletion history to delete the restored note again.
 Three reconciliation passes per drive bound a multi-drive run; a failing step is reported and the rest of the sync goes on.
 Images in `attachments/` sync as immutable binary files named by their SHA-256 (`attachments/<sha256>.<png|jpg|gif|webp>`;
 other files there are not synced): they are uploaded, downloaded or deleted, never merged. The core is WebAssembly, so
@@ -140,8 +160,11 @@ server-side recovery. Private browsing may limit storage. WebCrypto, IndexedDB a
 Coding agents (and humans) should start with [AGENTS.md](AGENTS.md): CI-mirroring commands, architecture and the
 cross-app parity rules shared with the Android and desktop apps.
 
-Requirements: [Mise](https://mise.jdx.dev/) (or asdf) and the Node.js version in
-`.tool-versions`. Mise reads that file; `mise.toml` adds project tasks without duplicating the version pins.
+Requirements: [Mise](https://mise.jdx.dev/) (or asdf), the Node.js version in `.tool-versions`,
+[rustup](https://rustup.rs/), Git and a native C linker. The commit-pinned shared sync source package runs its
+WebAssembly build during `npm ci`; `sh deploy/install-sync-toolchain.sh` installs Rust 1.99.1 with the
+`wasm32-unknown-unknown` target and wasm-bindgen-cli 0.2.129. CI and the Docker builder use these same pins; the
+production Caddy image contains neither Rust nor Node. Mise reads the Node pin; `mise.toml` adds project tasks.
 No database, Docker or cloud credentials are needed to run the local editor.
 
 From the repository root:

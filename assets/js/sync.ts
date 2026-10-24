@@ -8,8 +8,11 @@
  */
 import {
   type Action,
+  type ConflictCopyIntent,
   type LocalEntry,
   type RemoteEntry,
+  type ReconcileInput,
+  type ExistingCopy,
   type Side,
   DEFAULT_MAX_PASSES,
   MANIFEST_PATH,
@@ -17,6 +20,7 @@ import {
   buildManifest,
   isAttachmentPath,
   isSyncedEntry,
+  localDeletions,
   plan,
   reconcile,
   sha256Hex,
@@ -55,8 +59,14 @@ export interface Remote {
     previous?: Entry,
     modifiedAt?: number,
   ): Promise<Entry>;
+  /** Creates a new folder, failing if the destination already exists. */
   mkdir(path: string): Promise<Entry>;
+  /** Provisions parent/internal folders; may reuse an existing folder. */
+  ensureFolder(path: string): Promise<Entry>;
+  /** Folder deletion must be atomic and non-recursive, or fail without making a request. */
   delete(entry: Entry): Promise<void>;
+  /** Identity-preserving, no-clobber case rename; never marks returned content as synced. */
+  rename(entry: Entry, toPath: string): Promise<Entry>;
   readManifest(): Promise<string | null>;
   writeManifest(text: string): Promise<void>;
 }
@@ -122,6 +132,22 @@ const fromCore = (e: RemoteEntry): Entry => ({
   modifiedAt: e.modifiedMillis,
 });
 
+interface PendingCopy {
+  intent: ConflictCopyIntent;
+  copyText: string;
+  winnerText: string;
+  input: Pick<
+    ReconcileInput,
+    "path" | "local" | "localModifiedMillis" | "remote" | "remoteEntry" | "base"
+  >;
+}
+interface PendingRename {
+  path: string;
+  toPath: string;
+  remote: Entry;
+  tree: Entry[];
+}
+
 export class SyncEngine {
   private records = new Map<string, RecordState>();
   /** Snapshot entries by path: they carry provider data (such as OneDrive eTags) that the core does not. */
@@ -130,14 +156,23 @@ export class SyncEngine {
   /** What the plan saw locally: content hashes of notes and attachments, FOLDER for folders. */
   private planned = new Map<string, string>();
   private known = new Set<string>();
+  private pending = new Map<string, PendingCopy>();
+  private renames = new Map<string, PendingRename>();
   private result: Outcome = { changes: 0, conflicts: [], errors: [] };
   constructor(
     private store: Store,
     private account: Account,
     private remote: Remote,
+    private linkedAccounts: Account[] = [],
   ) {}
   private get key(): string {
     return `${this.account.id}:records`;
+  }
+  private get copyKey(): string {
+    return `${this.account.id}:copy-intents`;
+  }
+  private get renameKey(): string {
+    return `${this.account.id}:rename-intents`;
   }
   async run(): Promise<Outcome> {
     this.result = { changes: 0, conflicts: [], errors: [] };
@@ -149,6 +184,17 @@ export class SyncEngine {
         r,
       ]),
     );
+    this.pending = new Map(
+      ((await this.store.value<PendingCopy[]>(this.copyKey)) ?? []).map((p) => [
+        p.intent.path,
+        p,
+      ]),
+    );
+    this.renames = new Map(
+      ((await this.store.value<PendingRename[]>(this.renameKey)) ?? []).map(
+        (r) => [r.path, r],
+      ),
+    );
     const local = await this.listLocal();
     // A failed snapshot aborts the run before any deletion decision is made.
     const snapshot = await this.remote.snapshot();
@@ -157,6 +203,21 @@ export class SyncEngine {
       ...local.map((e) => e.path),
       ...snapshot.map((e) => e.path),
     ]);
+    for (const rename of this.renames.values())
+      await this.guarded(rename.path, () => this.replayRename(rename));
+    for (const pending of this.pending.values())
+      await this.guarded(pending.intent.copyPath, () =>
+        this.recoverCopy(pending),
+      );
+    for (const [path, hash] of this.planned)
+      if (!local.some((e) => e.path === path))
+        local.push({
+          path,
+          isFolder: hash === FOLDER,
+          sha256: hash === FOLDER ? undefined : hash,
+          modifiedMillis: this.modified.get(path),
+        });
+    await this.markLocalDeletions(local);
     let manifest: string | null = null;
     try {
       manifest = await this.remote.readManifest();
@@ -165,7 +226,7 @@ export class SyncEngine {
     }
     const { actions } = plan({
       local,
-      remote: snapshot
+      remote: [...this.entries.values()]
         .filter((e) => isSyncedEntry(e.path, e.folder))
         .map(toCore),
       records: this.coreRecords(),
@@ -173,6 +234,7 @@ export class SyncEngine {
     });
     for (const action of actions)
       await this.guarded(action.path, () => this.apply(action));
+    await this.finishCopies();
     await this.guarded(MANIFEST_PATH, async () => {
       const text = buildManifest(
         this.coreRecords(),
@@ -187,15 +249,38 @@ export class SyncEngine {
     await this.store.remove(`${this.account.id}:conflicts`);
     return this.result;
   }
-  private coreRecords() {
-    return [...this.records.values()].map((r) => ({
+  private coreRecords(records = [...this.records.values()]) {
+    return records.map((r) => ({
       path: r.path,
       isFolder: r.folder,
       remoteId: r.remoteId,
       remoteVersion: r.version,
       localHash: r.hash,
       syncedAt: r.syncedAt,
+      localDeleted: r.localDeleted ?? false,
     }));
+  }
+  private async markLocalDeletions(local: LocalEntry[]): Promise<void> {
+    const accounts = new Set([
+      ...(await this.store.accounts()).map((a) => a.id),
+      ...this.linkedAccounts.map((a) => a.id),
+      this.account.id,
+    ]);
+    for (const id of accounts) {
+      const key = `${id}:records`;
+      const records =
+        id === this.account.id
+          ? [...this.records.values()]
+          : ((await this.store.value<RecordState[]>(key)) ?? []);
+      const deleted = new Set(localDeletions(local, this.coreRecords(records)));
+      if (!deleted.size) continue;
+      const next = records.map((r) =>
+        deleted.has(r.path) ? { ...r, localDeleted: true } : r,
+      );
+      await this.store.put(key, next);
+      if (id === this.account.id)
+        this.records = new Map(next.map((r) => [r.path, r]));
+    }
   }
   private async listLocal(): Promise<LocalEntry[]> {
     const entries: LocalEntry[] = [];
@@ -319,17 +404,76 @@ export class SyncEngine {
         return this.forget(action.path);
       case "deleteLocalFolder":
         if (!(await this.unchanged(action.path))) return;
-        if (action.path === ATTACHMENTS) {
-          for (const path of await this.store.attachmentPaths())
-            await this.store.deleteAttachment(path);
-          await this.store.remove(ATTACHMENTS_FOLDER);
-        } else await this.store.delete(action.path);
+        await this.store.deleteEmptyFolder(
+          action.path,
+          action.path === ATTACHMENTS ? ATTACHMENTS_FOLDER : undefined,
+        );
         await this.forgetTree(action.path, action.forget);
         this.result.changes++;
         return;
       case "deleteRemoteFolder":
         await this.remote.delete(this.entry(action.remote));
         return this.forgetTree(action.path, action.forget);
+      case "renameLocal":
+      case "renameRemote": {
+        const metadataOnly =
+          action.kind === "renameLocal" &&
+          !(await this.store.note(action.path));
+        const localPath = metadataOnly ? action.toPath : action.path;
+        const expected = (await this.store.list()).filter(
+          (n) => n.path === localPath || inside(localPath, n.path),
+        );
+        if (action.kind === "renameLocal") {
+          if (
+            !(await this.unchanged(localPath)) ||
+            (!action.isFolder &&
+              (await this.current(localPath)) !== action.sha256)
+          )
+            throw new Error(
+              "The stale spelling changed; sync again before renaming.",
+            );
+        } else {
+          const note = await this.store.note(action.toPath);
+          if (
+            !note ||
+            note.folder !== action.isFolder ||
+            (!note.folder &&
+              action.sha256 !== null &&
+              hashContent(note.text) !== action.sha256)
+          )
+            throw new Error(
+              "The renamed item changed; sync again before renaming.",
+            );
+          const rename: PendingRename = {
+            path: action.path,
+            toPath: action.toPath,
+            remote: this.entry(action.remote),
+            tree: [...this.entries.values()].filter(
+              (e) => e.path === action.path || inside(action.path, e.path),
+            ),
+          };
+          this.renames.set(rename.path, rename);
+          await this.store.put(this.renameKey, [...this.renames.values()]);
+          return this.replayRename(rename);
+        }
+        const records = [...this.records.values()].map((r) =>
+          r.path === action.path || inside(action.path, r.path)
+            ? { ...r, path: action.toPath + r.path.slice(action.path.length) }
+            : r,
+        );
+        await this.store.commitSyncRename(
+          this.account.id,
+          action.path,
+          action.toPath,
+          records,
+          action.kind === "renameLocal" ? expected : undefined,
+          metadataOnly,
+        );
+        this.records = new Map(records.map((r) => [r.path, r]));
+        if (action.kind === "renameLocal" && !metadataOnly)
+          this.result.changes++;
+        return;
+      }
       case "reconcile":
         return this.reconcile(action.path, action.remote, action.hasRecord);
     }
@@ -349,6 +493,9 @@ export class SyncEngine {
       ? ((await this.store.base(this.account.id, path)) ?? null)
       : null;
     const localModified = this.modified.get(path) ?? 0;
+    const pending = this.pending.get(path);
+    const existing =
+      pending && (await this.store.note(pending.intent.copyPath));
     const outcome = reconcile({
       path,
       local,
@@ -358,6 +505,15 @@ export class SyncEngine {
       base: baseText,
       existingPaths: [...this.known],
       newId: newId(),
+      conflictCopyIntent: pending?.intent ?? null,
+      existingCopy:
+        existing && !existing.folder
+          ? {
+              path: existing.path,
+              text: existing.text,
+              modifiedMillis: existing.modifiedAt ?? 0,
+            }
+          : null,
     });
     switch (outcome.kind) {
       case "same":
@@ -376,15 +532,36 @@ export class SyncEngine {
       case "newestWins": {
         const localWins = outcome.winner === "local";
         // The copy keeps the modification time of the version that lost.
-        const copyTime = localWins ? entry.modifiedAt : localModified;
+        const copyTime = outcome.copyModifiedMillis;
+        const next: PendingCopy = {
+          intent: outcome.conflictCopyIntent,
+          copyText: outcome.copyText,
+          winnerText: localWins ? local : remote,
+          input: {
+            path,
+            local,
+            localModifiedMillis: localModified,
+            remote,
+            remoteEntry,
+            base: baseText,
+          },
+        };
+        const pendingCopies = new Map(this.pending).set(path, next);
         // Save the losing version locally before anything overwrites it, so a failing step never loses it.
-        await this.store.write(
-          outcome.copyPath,
-          outcome.copyText,
-          undefined,
-          copyTime,
+        await this.store.stageSyncCopy(
+          this.copyKey,
+          [...pendingCopies.values()],
+          {
+            path: outcome.copyPath,
+            text: outcome.copyText,
+            modifiedAt: copyTime,
+          },
+          outcome.reuseCopy,
         );
+        this.pending = pendingCopies;
         this.known.add(outcome.copyPath);
+        this.planned.set(outcome.copyPath, hashContent(outcome.copyText));
+        this.modified.set(outcome.copyPath, copyTime);
         this.result.conflicts.push({
           path,
           copyPath: outcome.copyPath,
@@ -400,23 +577,223 @@ export class SyncEngine {
             local,
           );
         else {
-          if (!(await this.writeIfUnchanged(path, remote, entry.modifiedAt)))
+          if (
+            !(await this.writeIfUnchanged(path, remote, entry.modifiedAt ?? 0))
+          )
             throw new Error("changed while syncing; will sync again");
           await this.recordFile(path, entry, remote);
         }
-        await this.recordFile(
-          outcome.copyPath,
-          await this.remote.upload(
-            outcome.copyPath,
-            outcome.copyText,
-            undefined,
-            copyTime,
-          ),
-          outcome.copyText,
-        );
+        await this.uploadCopy(next);
         return;
       }
     }
+  }
+  private async uploadCopy(pending: PendingCopy): Promise<void> {
+    const { copyPath: path, copyModifiedMillis: modifiedAt } = pending.intent;
+    const existing = this.entries.get(path);
+    let entry: Entry;
+    if (existing) {
+      if (
+        existing.folder ||
+        decodeNote(await this.remote.downloadBytes(existing)) !==
+          pending.copyText ||
+        !this.sameRemoteTime(existing.modifiedAt ?? 0, modifiedAt)
+      )
+        throw new Error(
+          "The remote conflicted copy changed; it was not replaced.",
+        );
+      entry = existing;
+    } else {
+      entry = await this.remote.upload(
+        path,
+        pending.copyText,
+        undefined,
+        modifiedAt,
+      );
+    }
+    if (
+      entry.folder ||
+      entry.path !== path ||
+      !this.sameRemoteTime(entry.modifiedAt ?? 0, modifiedAt)
+    )
+      throw new Error(
+        "The drive did not preserve the conflicted copy's path and edit time.",
+      );
+    this.entries.set(path, entry);
+    await this.recordFile(path, entry, pending.copyText);
+  }
+  private async replayRename(rename: PendingRename): Promise<void> {
+    const current = [...this.entries.values()].find(
+      (e) => e.id === rename.remote.id,
+    );
+    if (!current || current.folder !== rename.remote.folder)
+      throw new Error(
+        "The pending rename's remote identity changed; its history was kept.",
+      );
+    if (current.path === rename.path) {
+      const target = await this.store.note(rename.toPath);
+      const tree = [...this.entries.values()].filter(
+        (e) => e.path === rename.path || inside(rename.path, e.path),
+      );
+      if (
+        !target ||
+        target.folder !== current.folder ||
+        tree.length !== rename.tree.length ||
+        tree.some(
+          (e) =>
+            !rename.tree.some(
+              (old) =>
+                old.path === e.path &&
+                old.id === e.id &&
+                old.folder === e.folder &&
+                old.version === e.version &&
+                old.tag === e.tag,
+            ),
+        )
+      )
+        throw new Error(
+          "The pending rename changed before completion; sync again.",
+        );
+      const moved = await this.remote.rename(current, rename.toPath);
+      for (const entry of tree) {
+        this.entries.delete(entry.path);
+        const path = rename.toPath + entry.path.slice(rename.path.length);
+        this.entries.set(
+          path,
+          entry.id === moved.id ? moved : { ...entry, path },
+        );
+      }
+    } else if (current.path !== rename.toPath)
+      throw new Error(
+        "The pending rename moved elsewhere; its history was kept.",
+      );
+    const records = [...this.records.values()].map((r) =>
+      r.path === rename.path || inside(rename.path, r.path)
+        ? { ...r, path: rename.toPath + r.path.slice(rename.path.length) }
+        : r,
+    );
+    if (new Set(records.map((r) => r.path)).size !== records.length)
+      throw new Error("The rename destination already has sync history.");
+    await this.store.commitSyncRename(
+      this.account.id,
+      rename.path,
+      rename.toPath,
+      records,
+    );
+    this.records = new Map(records.map((r) => [r.path, r]));
+    this.renames.delete(rename.path);
+    await this.store.put(this.renameKey, [...this.renames.values()]);
+  }
+  private sameRemoteTime(actual: number, expected: number): boolean {
+    return (
+      actual === expected ||
+      (this.account.provider === "dropbox" &&
+        actual === Math.floor(expected / 1000) * 1000)
+    );
+  }
+  private async recoverCopy(pending: PendingCopy): Promise<void> {
+    const old = await this.store.note(pending.intent.copyPath);
+    const remote = this.entries.get(pending.intent.copyPath);
+    let existing: ExistingCopy | null =
+      old && !old.folder
+        ? {
+            path: old.path,
+            text: old.text,
+            modifiedMillis: old.modifiedAt ?? 0,
+          }
+        : null;
+    if (old?.folder) existing = { path: old.path, text: "", modifiedMillis: 0 };
+    if (
+      remote &&
+      (!existing ||
+        (existing.text === pending.copyText &&
+          existing.modifiedMillis === pending.intent.copyModifiedMillis))
+    ) {
+      const text = remote.folder
+        ? ""
+        : decodeNote(await this.remote.downloadBytes(remote));
+      existing = {
+        path: remote.path,
+        text,
+        modifiedMillis: this.sameRemoteTime(
+          remote.modifiedAt ?? 0,
+          pending.intent.copyModifiedMillis,
+        )
+          ? pending.intent.copyModifiedMillis
+          : (remote.modifiedAt ?? 0),
+      };
+    }
+    const outcome = reconcile({
+      ...pending.input,
+      existingPaths: [...this.known],
+      newId: newId(),
+      conflictCopyIntent: pending.intent,
+      existingCopy: existing,
+    });
+    if (outcome.kind !== "newestWins")
+      throw new Error(
+        "The saved conflict intent is inconsistent; its copy was preserved.",
+      );
+    const next: PendingCopy = {
+      ...pending,
+      intent: outcome.conflictCopyIntent,
+      copyText: outcome.copyText,
+    };
+    const copies = new Map(this.pending).set(next.intent.path, next);
+    const { copyPath: path, copyModifiedMillis: modifiedAt } = next.intent;
+    const current = await this.store.note(path);
+    await this.store.stageSyncCopy(
+      this.copyKey,
+      [...copies.values()],
+      { path, text: next.copyText, modifiedAt },
+      outcome.reuseCopy,
+    );
+    this.pending = copies;
+    if (!current) {
+      this.result.changes++;
+      this.planned.set(path, hashContent(next.copyText));
+      this.modified.set(path, modifiedAt);
+    }
+    this.known.add(path);
+    this.result.conflicts.push({
+      path: next.intent.path,
+      copyPath: path,
+      winner: outcome.winner,
+      baseText: next.input.base ?? null,
+      driveId: this.account.id,
+    });
+    await this.uploadCopy(next);
+  }
+  private async finishCopies(): Promise<void> {
+    this.pending = new Map(
+      ((await this.store.value<PendingCopy[]>(this.copyKey)) ?? []).map((p) => [
+        p.intent.path,
+        p,
+      ]),
+    );
+    for (const [path, pending] of this.pending) {
+      const record = this.records.get(path);
+      const remote = this.entries.get(path);
+      const copyRecord = this.records.get(pending.intent.copyPath);
+      const copyRemote = this.entries.get(pending.intent.copyPath);
+      const copy = await this.store.note(pending.intent.copyPath);
+      if (
+        record &&
+        remote &&
+        copyRecord?.hash === hashContent(pending.copyText) &&
+        copyRemote &&
+        copyRemote.id === copyRecord.remoteId &&
+        copyRemote.version === copyRecord.version &&
+        copy?.text === pending.copyText &&
+        copy.modifiedAt === pending.intent.copyModifiedMillis &&
+        record.hash === hashContent(pending.winnerText) &&
+        record.remoteId === remote.id &&
+        record.version === remote.version &&
+        (await this.current(path)) === record.hash
+      )
+        this.pending.delete(path);
+    }
+    await this.store.put(this.copyKey, [...this.pending.values()]);
   }
   /** What is stored locally at `path` now, in the form of `planned`. */
   private async current(path: string): Promise<string | undefined> {
@@ -459,7 +836,7 @@ export class SyncEngine {
     const note = await this.store.note(path);
     const now = note && (note.folder ? FOLDER : hashContent(note.text));
     if (now !== this.planned.get(path)) return false;
-    await this.store.write(path, text, note?.revision, modifiedAt);
+    await this.store.write(path, text, note?.revision ?? null, modifiedAt);
     return true;
   }
   private async read(path: string): Promise<Content> {
@@ -481,21 +858,22 @@ export class SyncEngine {
       if (sha256Hex(bytes) !== attachmentHash(path))
         throw new Error("content does not match its name; skipped");
       if (!(await this.unchanged(path))) return false;
-      await this.store.putAttachment(path, bytes, entry.modifiedAt);
+      await this.store.putAttachment(path, bytes, entry.modifiedAt ?? 0);
       await this.store.put(ATTACHMENTS_FOLDER, true);
       await this.recordFile(path, entry, bytes);
       return true;
     }
     const text = decodeNote(bytes);
-    if (!(await this.writeIfUnchanged(path, text, entry.modifiedAt)))
+    if (!(await this.writeIfUnchanged(path, text, entry.modifiedAt ?? 0)))
       return false;
     await this.recordFile(path, entry, text);
     return true;
   }
   private async createLocalFolder(path: string): Promise<void> {
-    if (path === ATTACHMENTS) await this.store.put(ATTACHMENTS_FOLDER, true);
-    else if (!(await this.store.note(path)))
-      await this.store.create(path, true);
+    await this.store.createSyncFolder(
+      path,
+      path === ATTACHMENTS ? ATTACHMENTS_FOLDER : undefined,
+    );
   }
   /** Records a synced file and, for notes, keeps `content` as the base copy for later merges. */
   private async recordFile(
@@ -508,6 +886,7 @@ export class SyncEngine {
       await this.store.putBase(this.account.id, path, content);
   }
   private async upsert(path: string, entry: Entry, hash: string) {
+    this.entries.set(path, entry);
     this.records.set(path, {
       path,
       folder: false,
@@ -566,6 +945,7 @@ export async function syncAll(
           store,
           target.account,
           target.remote,
+          targets.map((t) => t.account),
         ).run();
       } catch (error) {
         outcome = {
@@ -591,5 +971,5 @@ export async function ensureParents(
   path: string,
 ): Promise<void> {
   const p = parent(path);
-  if (p) await remote.mkdir(p);
+  if (p) await remote.ensureFolder(p);
 }

@@ -11,11 +11,14 @@ OneDrive. It is one of three MarkNotes apps that share one note format and one s
 
 Node is pinned in `.tool-versions` and shared with CI; use Mise (or asdf). Production uses Caddy, not Node.
 No database, Docker or cloud credentials are needed.
+Installing the commit-pinned sync source package also requires rustup, Git and a native C linker. The setup task,
+CI and Docker builder run `deploy/install-sync-toolchain.sh` for Rust 1.99.1, the `wasm32-unknown-unknown` target and
+wasm-bindgen-cli 0.2.129. Install these before a direct `npm ci`; generated binaries are not checked in.
 
 ```sh
 git submodule update --init spec   # marknotes-spec (shared format + fixtures)
 mise trust && mise install
-mise run setup        # npm ci + static build
+mise run setup        # pinned Rust/WASM tooling + npm ci + static build
 mise run dev          # Vite with asset watching on http://localhost:4000
 ```
 
@@ -68,7 +71,7 @@ Browser modules (`assets/js/`):
 - `sync.ts` — **sync executor**: the algorithm (plan, three-way merge, newest-wins reconciliation with
   ` (conflicted copy).md` siblings, manifest `.marknotes/manifest.json` `format: 1`, multi-drive scheduling) comes from
   the shared core [marknotes-sync](https://github.com/MaxDac/marknotes-sync) (`@marknotes/sync`, Rust → WebAssembly,
-  installed from its GitHub release tarball). `sync.ts` only lists/hashes the local tree, runs the planned actions
+  installed from commit-pinned Git source and built during npm installation). `sync.ts` only lists/hashes the local tree, runs the planned actions
   against the drive and IndexedDB, and reports conflicts; `syncAll` drives the core's `SyncScheduler`.
   Change sync semantics in marknotes-sync (and the spec), not here.
 - `conflicts.ts` — conflict merge-back (three-way merge of the conflicted copy into the note, per-hunk

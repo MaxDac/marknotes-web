@@ -1,4 +1,12 @@
+FROM rust:1.99.1-slim-bookworm AS sync-toolchain
 FROM node:24.21.0-bookworm-slim AS assets
+ENV CARGO_HOME=/usr/local/cargo RUSTUP_HOME=/usr/local/rustup RUSTUP_TOOLCHAIN=1.99.1
+ENV PATH=/usr/local/cargo/bin:$PATH
+COPY --from=sync-toolchain /usr/local/cargo/ /usr/local/cargo/
+COPY --from=sync-toolchain /usr/local/rustup/ /usr/local/rustup/
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates gcc libc6-dev pkg-config libssl-dev && apt-get clean
+COPY deploy/install-sync-toolchain.sh /usr/local/bin/install-sync-toolchain
+RUN sh /usr/local/bin/install-sync-toolchain
 WORKDIR /work/assets
 COPY assets/package.json assets/package-lock.json ./
 RUN npm ci --no-audit --no-fund
