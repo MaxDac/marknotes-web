@@ -1190,21 +1190,28 @@ export class NotesUI {
     );
     e.hidden = false;
   }
-  async save(): Promise<void> {
-    if (this.saving) await this.saving;
-    this.saving = this.savePending();
+  async save(options: { ifAvailable?: boolean } = {}): Promise<void> {
+    if (this.saving) {
+      if (options.ifAvailable)
+        throw new Error(
+          "Notes are still being saved. Finish any operation in other MarkNotes tabs, then try again.",
+        );
+      await this.saving;
+    }
+    this.saving = this.savePending(options);
     try {
       await this.saving;
     } finally {
       this.saving = undefined;
     }
   }
-  private async savePending(): Promise<void> {
-    clearTimeout(this.timer);
+  private async savePending(options: { ifAvailable?: boolean }): Promise<void> {
     if (!this.dirty || !this.current) return;
     const note = this.current,
-      body = this.editor.state.doc.toString();
+      body = this.editor.state.doc.toString(),
+      timer = this.timer;
     await exclusive(async () => {
+      clearTimeout(timer);
       const saved = await this.store.write(
         note.path,
         withBody(note.text, body),
@@ -1214,7 +1221,7 @@ export class NotesUI {
         this.current = saved;
         if (this.editor.state.doc.toString() === body) this.dirty = false;
       }
-    });
+    }, options);
     this.status(this.dirty ? "Unsaved changes" : "Saved in this browser");
   }
   private async run(action: () => Promise<void>): Promise<void> {
@@ -1223,16 +1230,20 @@ export class NotesUI {
     this.get<HTMLFieldSetElement>("#workspace").disabled = true;
     this.setEditable(false);
     this.get("#error").hidden = true;
+    this.status("Working...");
     try {
-      await this.save();
-      await exclusive(action);
+      await this.save({ ifAvailable: true });
+      await exclusive(action, { ifAvailable: true });
     } catch (error) {
+      this.status(this.dirty ? "Unsaved changes" : "Action not completed");
       this.error(message(error));
     } finally {
       this.busy = false;
       this.get<HTMLFieldSetElement>("#workspace").disabled = false;
       this.setEditable(!!this.current);
       this.chrome();
+      if (this.get("#status").textContent === "Working...")
+        this.status(this.dirty ? "Unsaved changes" : "Ready");
     }
   }
   private async openRoot(): Promise<void> {

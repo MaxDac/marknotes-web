@@ -1,11 +1,58 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Store, Vault, validateName, validatePath } from "../js/storage";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  exclusive,
+  Store,
+  Vault,
+  validateName,
+  validatePath,
+} from "../js/storage";
 
 let store: Store;
 beforeEach(async () => {
   store = await Store.open(crypto.randomUUID());
 });
-afterEach(() => store.close());
+afterEach(() => {
+  store.close();
+  vi.unstubAllGlobals();
+});
+describe("note tree locking", () => {
+  it("runs queued work under the default exclusive lock", async () => {
+    const request = vi.fn(
+      async (
+        name: string,
+        _options: LockOptions,
+        work: LockGrantedCallback<unknown>,
+      ) => work({ name, mode: "exclusive" }),
+    );
+    vi.stubGlobal("navigator", { locks: { request } });
+    await expect(exclusive(async () => 42)).resolves.toBe(42);
+    expect(request).toHaveBeenCalledWith(
+      "marknotes:tree",
+      {},
+      expect.any(Function),
+    );
+  });
+  it("rejects unavailable interactive locks without running the action", async () => {
+    const request = vi.fn(
+      async (
+        _name: string,
+        _options: LockOptions,
+        work: LockGrantedCallback<unknown>,
+      ) => work(null),
+    );
+    const action = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { locks: { request } });
+    await expect(exclusive(action, { ifAvailable: true })).rejects.toThrow(
+      "Another MarkNotes tab",
+    );
+    expect(action).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith(
+      "marknotes:tree",
+      { ifAvailable: true },
+      expect.any(Function),
+    );
+  });
+});
 describe("browser note tree", () => {
   it("persists exact UTF-8/newlines and creates parent folders", async () => {
     await store.write("folder/note.MD", "café\r\nnext\n");

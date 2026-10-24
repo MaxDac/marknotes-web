@@ -16,6 +16,102 @@ async function create(
   await page.getByRole("menuitem", { name: kind }).click();
   await submit(page, name);
 }
+test("a dialog in another tab reports contention without freezing the workspace", async ({
+  page,
+  context,
+}) => {
+  await page.goto("/");
+  const other = await context.newPage();
+  await other.goto("/");
+  await other
+    .getByRole("button", { name: "Create a note", exact: true })
+    .click();
+  await expect(other.getByRole("dialog")).toBeVisible();
+
+  await page
+    .getByRole("button", { name: "Create a note", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toContainText("Another MarkNotes tab");
+  await expect(page.locator("#status")).toHaveText("Action not completed");
+  await expect(page.getByRole("button", { name: "Settings" })).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: "Create a note", exact: true }),
+  ).toBeEnabled();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Done" }).click();
+
+  await other.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Create a note", exact: true })
+    .click();
+  await submit(page, "Retry.md");
+  await expect(page.locator("#status")).toHaveText("Ready");
+});
+
+for (const queued of [false, true])
+  test(`${queued ? "Queued" : "Scheduled"} autosaves preserve edits and do not freeze foreground actions`, async ({
+    page,
+    context,
+  }) => {
+    await page.goto("/");
+    await create(page, "New note", "Pending.md");
+    const other = await context.newPage();
+    await other.goto("/");
+    await other.getByRole("button", { name: "New", exact: true }).click();
+    await other
+      .getByRole("menuitem", { name: "New note", exact: true })
+      .click();
+    await expect(other.getByRole("dialog")).toBeVisible();
+
+    if (!queued) {
+      await page.clock.install();
+      await page.clock.pauseAt(new Date(Date.now() + 1_000));
+    }
+    const editor = page.getByRole("textbox", { name: "Markdown editor" });
+    await editor.fill("Unsaved work must survive lock contention");
+    if (queued)
+      await expect
+        .poll(() =>
+          page.evaluate(async () =>
+            (await navigator.locks.query()).pending?.some(
+              (lock) => lock.name === "marknotes:tree",
+            ),
+          ),
+        )
+        .toBe(true);
+    await page
+      .getByRole("button", { name: "Sync now", exact: true })
+      .dispatchEvent("click");
+    await expect(page.getByRole("alert")).toContainText(
+      queued ? "Notes are still being saved" : "Another MarkNotes tab",
+    );
+    await expect(page.locator("#status")).toHaveText("Unsaved changes");
+    await expect(editor).toBeEditable();
+    await expect(editor).toHaveText(
+      "Unsaved work must survive lock contention",
+    );
+    await expect(page.getByRole("button", { name: "Settings" })).toBeEnabled();
+
+    if (!queued) {
+      await page.clock.resume();
+      await expect
+        .poll(() =>
+          page.evaluate(async () =>
+            (await navigator.locks.query()).pending?.some(
+              (lock) => lock.name === "marknotes:tree",
+            ),
+          ),
+        )
+        .toBe(true);
+    }
+    await editor.fill("Newer edits must also be saved");
+    await other.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.locator("#status")).toHaveText("Saved in this browser");
+    await page.reload();
+    await expect(editor).toHaveText("Newer edits must also be saved");
+  });
+
 test("local CRUD, editor, privacy, settings and reload", async ({ page }) => {
   await page.route("**/config.json", (route) =>
     route.fulfill({
