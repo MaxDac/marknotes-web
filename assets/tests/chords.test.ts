@@ -6,6 +6,7 @@ import {
   emptyStrings,
   fretsText,
   isChordSequence,
+  needsChordOptIn,
   newChordSequenceText,
   parseChordBody,
   serializeChordBody,
@@ -13,6 +14,18 @@ import {
   validateChordSequence,
 } from "../js/chords";
 import { noteBody, noteId, withBody } from "../js/notemeta";
+
+describe("chord sequences setting", () => {
+  const chords = newChordSequenceText(),
+    plain = "---\nid: abc\n---\n# Hi\n";
+  it("asks to opt in only for chord sequences while the setting is off", () => {
+    expect(needsChordOptIn(false, { text: chords })).toBe(true);
+    expect(needsChordOptIn(true, { text: chords })).toBe(false);
+    expect(needsChordOptIn(false, { text: plain })).toBe(false);
+    expect(needsChordOptIn(false, { folder: true, text: chords })).toBe(false);
+    expect(needsChordOptIn(false, undefined)).toBe(false);
+  });
+});
 
 // Format details are covered by the marknotes-spec fixtures (assets/parity); these test app-side helpers.
 const C: Chord = {

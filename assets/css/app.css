@@ -944,7 +944,8 @@ a {
 }
 
 /* Conflicts */
-#conflicts[hidden] {
+#conflicts[hidden],
+#empty-new-chords[hidden] {
   display: none;
 }
 .modal.conflicts {

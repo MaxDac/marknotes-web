@@ -47,8 +47,10 @@ import {
   type SyncConflict,
 } from "./conflicts";
 import {
+  CHORD_SETTING,
   chordLineEnding,
   isChordSequence,
+  needsChordOptIn,
   newChordSequenceText,
   parseChordBody,
   serializeChordBody,
@@ -142,6 +144,8 @@ export class NotesUI {
   private chordEditor?: ChordEditor;
   /** The user chose "View as text" for the open chord sequence. */
   private textView = false;
+  /** Settings → Chord sequences: off by default, stored only in this browser. */
+  private chordsEnabled = false;
   private current?: Note;
   private selected = "";
   private dirty = false;
@@ -314,11 +318,15 @@ export class NotesUI {
             icon: "file",
             action: act(() => this.create(false)),
           },
-          {
-            label: "New chord sequence",
-            icon: "chords",
-            action: act(() => this.create(false, true)),
-          },
+          ...(this.chordsEnabled
+            ? [
+                {
+                  label: "New chord sequence",
+                  icon: "chords" as const,
+                  action: act(() => this.create(false, true)),
+                },
+              ]
+            : []),
           {
             label: "New folder",
             icon: "folder",
@@ -412,10 +420,7 @@ export class NotesUI {
     empty.append(
       element("div", undefined, "empty-art"),
       element("h2", "Choose or create a note"),
-      element(
-        "p",
-        "Pick a note from the sidebar, or start a new note or chord sequence in this folder.",
-      ),
+      element("p", undefined, "empty-hint"),
     );
     const emptyActions = element("div", undefined, "empty-actions");
     emptyActions.append(
@@ -433,11 +438,15 @@ export class NotesUI {
         {
           icon: "chords",
           variant: "outline",
+          id: "empty-new-chords",
         },
       ),
     );
     empty.append(emptyActions);
     empty.firstElementChild!.append(icon("file"));
+    this.chordsEnabled =
+      (await this.store.value<boolean>(CHORD_SETTING)) === true;
+    this.applyChordSetting();
     this.theme = (await this.store.value<string>("theme")) ?? "system";
     const accent = (await this.store.value<string>("accent")) ?? "violet";
     this.accent = accent in palettes ? accent : "violet";
@@ -474,7 +483,7 @@ export class NotesUI {
     await this.refresh();
     const last = await this.store.value<string>("active-note");
     if (last) await exclusive(() => this.open(last));
-    else this.chrome();
+    this.chrome();
     if ((await this.store.accounts()).length) await this.run(() => this.sync());
   }
   private applyTheme(): void {
@@ -500,6 +509,26 @@ export class NotesUI {
       s.append(element("h3", title), ...children);
       return s;
     };
+    const chordSwitch = toggle(
+      "Create and edit chord sequences",
+      this.chordsEnabled,
+    );
+    chordSwitch.id = "chord-sequences";
+    chordSwitch.addEventListener("click", () => {
+      const on = checked(chordSwitch);
+      void (async () => {
+        if (!on && !(await this.leaveChords())) {
+          chordSwitch.setAttribute("aria-checked", "true");
+          return;
+        }
+        await this.setChordsEnabled(on);
+      })().catch((e: unknown) => this.error(message(e)));
+    });
+    const chordHint = element(
+      "p",
+      "Adds New chord sequence and opens chord notes in the chord editor. Stored only in this browser; notes are never changed.",
+      "hint",
+    );
     body.append(
       section(
         "Theme",
@@ -536,6 +565,7 @@ export class NotesUI {
           "swatches",
         ),
       ),
+      section("Chord sequences", chordSwitch, chordHint),
       section(
         "Images",
         element(
@@ -851,7 +881,10 @@ export class NotesUI {
     const main = this.get("#main"),
       banner = this.get("#chord-banner"),
       toggle = this.get<HTMLButtonElement>("#view-mode");
-    const chordFile = !!this.current && isChordSequence(this.current.text);
+    const chordFile =
+      this.chordsEnabled &&
+      !!this.current &&
+      isChordSequence(this.current.text);
     main.classList.toggle("chord-file", chordFile);
     banner.hidden = true;
     let chords = false;
@@ -872,6 +905,34 @@ export class NotesUI {
       icon(chords ? "code" : "chords"),
       element("span", chords ? "View as text" : "View chords"),
     );
+  }
+  /** Shows chord-sequence creation entry points only when the setting is on. */
+  private applyChordSetting(): void {
+    this.get("#empty-new-chords").hidden = !this.chordsEnabled;
+    this.get(".empty-hint").textContent = this.chordsEnabled
+      ? "Pick a note from the sidebar, or start a new note or chord sequence in this folder."
+      : "Pick a note from the sidebar, or start a new note in this folder.";
+  }
+  private async setChordsEnabled(on: boolean): Promise<void> {
+    this.chordsEnabled = on;
+    await this.store.put(CHORD_SETTING, on);
+    this.applyChordSetting();
+    this.applyMode();
+  }
+  /** With the setting off, asks to turn it on before opening a chord sequence; true to open. */
+  private async allowChords(note: Note | undefined): Promise<boolean> {
+    if (!note || !needsChordOptIn(this.chordsEnabled, note)) return true;
+    const ok = await confirmDialog({
+      title: "Enable chord sequences?",
+      text: `${note.path.split("/").at(-1)} is a chord sequence. Turn on chord sequences to open it in the chord editor? You can change this later in Settings.`,
+      confirm: "Yes",
+      cancel: "No",
+    });
+    if (!ok) return false;
+    this.chordsEnabled = true;
+    await this.store.put(CHORD_SETTING, true);
+    this.applyChordSetting();
+    return true;
   }
   private async toggleView(): Promise<void> {
     if (!this.current || this.busy) return;
@@ -1176,11 +1237,12 @@ export class NotesUI {
     await this.store.put("active-note", "");
     this.chrome();
   }
-  private async open(path: string): Promise<void> {
+  private async open(path: string, confirmChords = true): Promise<void> {
     const same = path === this.current?.path;
     if (!same && !(await this.leaveChords())) return;
     if ((await this.store.assignIds([path])).length) await this.refresh();
     const note = await this.store.note(path);
+    if (!same && confirmChords && !(await this.allowChords(note))) return;
     this.selected = note ? path : "";
     this.current = note?.folder ? undefined : note;
     this.dirty = false;
@@ -1230,7 +1292,7 @@ export class NotesUI {
     if (to === null || to === this.selected) return;
     await this.store.move(this.selected, to);
     await this.refresh();
-    await this.open(to);
+    await this.open(to, false);
   }
   private async delete(): Promise<void> {
     if (!this.selected) throw new Error("Select a note or folder first.");

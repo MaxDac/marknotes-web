@@ -94,6 +94,20 @@ export const normalizeSequence = (sequence: ChordSequence): ChordSequence => ({
 });
 
 /** True when the front-matter's first `type` line has the value `chords`. */
+/** Browser-only storage key for Settings → Chord sequences (off by default, never synced). */
+export const CHORD_SETTING = "chord-sequences";
+
+/**
+ * True when opening `note` must first ask to enable chord sequences: the setting is off and the note is a chord
+ * sequence. The setting never changes how notes are detected or stored.
+ */
+export function needsChordOptIn(
+  enabled: boolean,
+  note: { folder?: boolean; text: string } | undefined,
+): boolean {
+  return !enabled && !!note && !note.folder && isChordSequence(note.text);
+}
+
 export function isChordSequence(text: string): boolean {
   const { header } = splitFrontMatter(text);
   if (!header) return false;

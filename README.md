@@ -28,13 +28,15 @@ the automated provider tests.
 - **Images**: insert PNG, JPEG, GIF or WebP images with the toolbar, paste or drag-and-drop. They are downscaled to at
   most 2048 px, stored in the root `attachments/` folder, synced to every drive, and can be cleaned up from **Settings**.
   See [marknotes-spec](https://github.com/MaxDac/marknotes-spec) (`spec/` submodule) for the shared note, link and attachment format.
-- **Chord sequences**: **New** → **New chord sequence** creates a note with `type: chords` in its front-matter. It opens in
+- **Chord sequences** (opt-in): turn on **Settings** → **Chord sequences** (off by default, stored only in this
+  browser). Then **New** → **New chord sequence** creates a note with `type: chords` in its front-matter. It opens in
   a graphical editor (ported from [ChordBuilder](https://github.com/MaxDac/ChordBuilder)) instead of the markdown editor.
   The editor shows an ordered list of guitar or bass chords with mini diagrams. You can add, edit, duplicate, delete and
   reorder chords, and each chord is built on a fretboard with fingers, tags and a note. **View as text** shows the raw
   markdown. A file that cannot be read, such as one with conflict markers, opens as text, and the parse error and its
-  line number are shown. Chord files are ordinary notes, so they sync, link and conflict like any other note. The format
-  is defined in the spec ("Chord sequences").
+  line number are shown. Chord files are ordinary notes, so they sync, link and conflict like any other note. With the
+  setting off, opening a chord sequence (for example one synced from another app) asks whether to enable chord
+  sequences; **No** leaves the note closed. The format is defined in the spec ("Chord sequences").
 - **Appearance**: a drive-style layout (sidebar folder tree, breadcrumb, toolbar, modal dialogs and menus built as custom
   accessible components, no native prompts or selects). **Settings** offers theme System, Light or Dark, and an accent
   colour from 9 palettes.
@@ -58,7 +60,7 @@ Out of scope: search, tags, background sync, offline UI, local note encryption.
 
 ### Notes and cloud folders
 
-Use **New** → **New note** / **New chord sequence** / **New folder** in the selected folder. **Rename / move** accepts a path relative to the local root.
+Use **New** → **New note** / **New chord sequence** (when enabled in Settings) / **New folder** in the selected folder. **Rename / move** accepts a path relative to the local root.
 Notes must end in `.md`; hidden names, traversal and moves into a folder's own descendants are rejected.
 The editor saves automatically and flushes before navigation or sync. Wait for **Saved in this browser** before closing
 the tab; a failed/stale save leaves the text in the editor and displays an error.

@@ -1,5 +1,17 @@
 import { test, expect, type Page } from "@playwright/test";
 
+async function setChords(page: Page, on: boolean): Promise<void> {
+  await page.getByRole("button", { name: "Settings" }).click();
+  const control = page.getByRole("switch", {
+    name: "Create and edit chord sequences",
+  });
+  if ((await control.getAttribute("aria-checked")) !== String(on))
+    await control.click();
+  await expect(control).toHaveAttribute("aria-checked", String(on));
+  await page.getByRole("button", { name: "Done" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+}
+
 async function newSequence(page: Page, name: string): Promise<void> {
   await page.getByRole("button", { name: "New", exact: true }).click();
   await page.getByRole("menuitem", { name: "New chord sequence" }).click();
@@ -20,6 +32,7 @@ test("builds, edits and reorders a chord sequence stored as a note", async ({
     socket.on("framesent", (f) => frames.push(String(f.payload))),
   );
   await page.goto("/");
+  await setChords(page, true);
   await newSequence(page, "Song.md");
   const builder = page.getByRole("form", { name: "Chord builder" });
   const sequence = page.getByRole("region", { name: "Chord sequence" });
@@ -124,6 +137,7 @@ test("falls back to text when a chord sequence cannot be read", async ({
   page,
 }) => {
   await page.goto("/");
+  await setChords(page, true);
   await newSequence(page, "Broken.md");
   await page.getByRole("button", { name: "View as text" }).click();
   const editor = page.getByRole("textbox", { name: "Markdown editor" });
@@ -153,6 +167,7 @@ test("creates a chord sequence from the empty folder state", async ({
   page,
 }) => {
   await page.goto("/");
+  await setChords(page, true);
   const empty = page.locator("#empty");
   await expect(empty).toContainText("chord sequence");
   await empty.getByRole("button", { name: "Create a chord sequence" }).click();
@@ -166,4 +181,71 @@ test("creates a chord sequence from the empty folder state", async ({
     page.getByRole("textbox", { name: "Markdown editor" }),
   ).toBeHidden();
   await expect(page.locator('#tree [data-path="Empty.md"]')).toBeVisible();
+});
+
+test("chord sequence creation is off by default and enabled in Settings", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const empty = page.locator("#empty");
+  const newButton = page.getByRole("button", { name: "New", exact: true });
+  await expect(empty.locator(".empty-hint")).not.toContainText(
+    "chord sequence",
+  );
+  await expect(
+    empty.getByRole("button", { name: "Create a chord sequence" }),
+  ).toBeHidden();
+  await newButton.click();
+  await expect(page.getByRole("menuitem", { name: "New note" })).toBeVisible();
+  await expect(
+    page.getByRole("menuitem", { name: "New chord sequence" }),
+  ).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  await setChords(page, true);
+  await expect(
+    empty.getByRole("button", { name: "Create a chord sequence" }),
+  ).toBeVisible();
+  await page.reload();
+  await newButton.click();
+  await expect(
+    page.getByRole("menuitem", { name: "New chord sequence" }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await setChords(page, false);
+  await expect(
+    empty.getByRole("button", { name: "Create a chord sequence" }),
+  ).toBeHidden();
+});
+
+test("opening a chord sequence with the setting off asks to enable it", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await setChords(page, true);
+  await newSequence(page, "Stored.md");
+  await page.getByRole("button", { name: "My notes" }).click();
+  await setChords(page, false);
+  const item = page.locator('#tree [data-path="Stored.md"]');
+  const builder = page.getByRole("form", { name: "Chord builder" });
+
+  await item.click();
+  let dialog = page.getByRole("dialog", { name: "Enable chord sequences?" });
+  await expect(dialog).toContainText("Stored.md is a chord sequence");
+  await dialog.getByRole("button", { name: "No" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator("#empty")).toBeVisible();
+  await expect(builder).toBeHidden();
+  await expect(page.locator("#title")).not.toContainText("Stored");
+
+  await item.click();
+  dialog = page.getByRole("dialog", { name: "Enable chord sequences?" });
+  await dialog.getByRole("button", { name: "Yes" }).click();
+  await expect(builder).toBeVisible();
+  await expect(page.locator("#title")).toContainText("Stored");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(
+    page.getByRole("switch", { name: "Create and edit chord sequences" }),
+  ).toHaveAttribute("aria-checked", "true");
 });
