@@ -320,6 +320,8 @@ export class Store {
   }
 }
 
+export class TreeBusyError extends Error {}
+
 export async function exclusive<T>(
   work: () => Promise<T>,
   options: { ifAvailable?: boolean } = {},
@@ -330,7 +332,7 @@ export async function exclusive<T>(
     );
   return navigator.locks.request("marknotes:tree", options, (lock) => {
     if (!lock)
-      throw new Error(
+      throw new TreeBusyError(
         "Another MarkNotes tab is using your notes. Finish its operation or close that tab, then try again.",
       );
     return work();

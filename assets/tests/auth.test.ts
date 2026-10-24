@@ -2,6 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Auth, pkce, request } from "../js/auth";
 import { Store, Vault, type Account } from "../js/storage";
+import { InteractionRequiredAuthError } from "@azure/msal-browser";
+import { syncFailure } from "../js/sync-errors";
 const mocks = vi.hoisted(() => ({
   config: vi.fn(),
   login: vi.fn(),
@@ -38,6 +40,7 @@ beforeEach(async () => {
 afterEach(() => {
   store.close();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 describe("browser authentication", () => {
   it("generates random S256 PKCE verifier/challenge and state", async () => {
@@ -118,5 +121,70 @@ describe("browser authentication", () => {
       "rate limiting",
     );
     expect(fetch.mock.calls[0][1].credentials).toBe("omit");
+  });
+  it("preserves typed network failures without retrying unknown failures", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new TypeError("Failed to fetch")),
+    );
+    await expect(
+      request("https://api.dropboxapi.com/test"),
+    ).rejects.toMatchObject({
+      failure: { kind: "transient" },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("invalid input")),
+    );
+    await expect(request("https://api.dropboxapi.com/test")).rejects.toThrow(
+      "invalid input",
+    );
+  });
+  it("caps HTTP retries and preserves the final Retry-After cooldown", async () => {
+    vi.useFakeTimers();
+    const fetch = vi
+      .fn()
+      .mockImplementation(
+        async () =>
+          new Response("", { status: 429, headers: { "Retry-After": "10" } }),
+      );
+    vi.stubGlobal("fetch", fetch);
+    const result = request("https://api.dropboxapi.com/test").catch(
+      syncFailure,
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await result).toEqual({
+      kind: "transient",
+      retryAt: Date.now() + 10_000,
+    });
+    expect(fetch).toHaveBeenCalledTimes(4);
+  });
+  it("treats revoked refresh grants and interactive MSAL renewal as explicit reconnects", async () => {
+    await new Vault(store).save(account.id, {
+      access: "expired",
+      refresh: "revoked",
+      expires: 0,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("", { status: 400 })),
+    );
+    const auth = new Auth(store, {
+      dropbox: "public-key",
+      onedrive: "public-client",
+    });
+    await expect(auth.token(account)).rejects.toMatchObject({
+      failure: { kind: "authentication" },
+    });
+    mocks.account.mockReturnValue(null);
+    mocks.sso.mockRejectedValue(
+      new InteractionRequiredAuthError("interaction_required", "Sign in"),
+    );
+    await expect(
+      auth.token({ ...account, provider: "onedrive" }),
+    ).rejects.toMatchObject({
+      failure: { kind: "authentication" },
+    });
+    expect(mocks.login).not.toHaveBeenCalled();
   });
 });

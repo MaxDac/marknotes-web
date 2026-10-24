@@ -31,6 +31,7 @@ import {
 } from "./storage";
 import { ATTACHMENTS, attachmentHash } from "./attachments";
 import { newId } from "./notemeta";
+import { syncFailure, type SyncFailure } from "./sync-errors";
 
 export interface Entry {
   path: string;
@@ -77,6 +78,7 @@ export interface Outcome {
   changes: number;
   conflicts: SyncConflict[];
   errors: string[];
+  failures?: SyncFailure[];
 }
 /** Local edit time; notes saved before timestamps existed fall back to their last sync. */
 export function localTime(note: Note, record?: RecordState): number {
@@ -245,6 +247,7 @@ export class SyncEngine {
       await step();
     } catch (error) {
       this.result.errors.push(`${path}: ${message(error)}`);
+      (this.result.failures ??= []).push(syncFailure(error));
     }
   }
   private entry(remote: RemoteEntry): Entry {
@@ -254,6 +257,7 @@ export class SyncEngine {
     switch (action.kind) {
       case "error":
         this.result.errors.push(`${action.path}: ${action.message}`);
+        (this.result.failures ??= []).push({ kind: "permanent" });
         return;
       case "recordFolder":
         return this.recordFolder(action.path, action.remoteId);
@@ -564,7 +568,12 @@ export async function syncAll(
           target.remote,
         ).run();
       } catch (error) {
-        outcome = { changes: 0, conflicts: [], errors: [message(error)] };
+        outcome = {
+          changes: 0,
+          conflicts: [],
+          errors: [message(error)],
+          failures: [syncFailure(error)],
+        };
         failed = true;
       }
       outcome.conflicts.unshift(...(outcomes.get(id)?.conflicts ?? []));
