@@ -16,6 +16,16 @@ the automated provider tests.
 > in this release. Its official SDK does not supply authentication/session/key unlocking, and a complete integration
 > within the fixed-host relay constraints has not been established.
 
+## MarkNotes on other platforms
+
+The same notes and synced folder work in the other MarkNotes apps. They are also linked from **Settings → MarkNotes on
+other platforms** (opened in a new tab only when clicked).
+
+- [MarkNotes for Android (F-Droid)](https://f-droid.org/packages/io.github.maxdac.marknotes.libre/) — source:
+  [MaxDac/marknotes-android](https://github.com/MaxDac/marknotes-android) (F-Droid listing pending)
+- [MarkNotes Pro for Android (GitHub Releases)](https://github.com/MaxDac/MarkNotes/releases)
+- [MarkNotes Desktop (GitHub Releases)](https://github.com/MaxDac/marknotes-electron/releases)
+
 ## Features
 
 - **Notes stay in your browser**: stored in IndexedDB as a tree of folders and `.md` notes. You can create, open, rename,

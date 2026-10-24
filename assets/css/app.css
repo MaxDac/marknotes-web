@@ -763,6 +763,13 @@ a {
   flex-wrap: wrap;
   gap: 8px;
 }
+.platform-links {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+}
 .fields {
   display: flex;
   flex-direction: column;
