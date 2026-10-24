@@ -333,7 +333,7 @@ describe("OneDrive store", () => {
       ["http://public.bn.files.1drv.com/x", false],
     ] as const) {
       mock((u) =>
-        u.includes("graph.microsoft.com")
+        new URL(u).hostname === "graph.microsoft.com"
           ? json({ id: "n", "@microsoft.graph.downloadUrl": url })
           : new Response("ok"),
       );
