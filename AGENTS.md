@@ -117,11 +117,14 @@ only points there). `assets/parity/fixtures.test.ts` runs every `spec/fixtures` 
   unless explicitly asked. The multi-stage Docker build uses Node, then ships only Caddy, public assets/config and jq.
   No deployment is implied by local implementation or testing; deployment handoffs must identify revision, tests,
   origin preservation, provider settings and worker-aware rollback.
-- Issue #34 plans a direct old-app deletion/replacement, not an in-place deployment. Cost approval and immediate
-  exact-app destruction confirmation are separate gates. Pause Fly Deploy/Release before merging; preserve the
-  rollback image outside the old registry and securely establish secret restoration before deletion. App deletion
-  deletes images/secrets too, and same-name reclamation is not guaranteed. Agree any fallback hostname/OAuth changes,
-  preserve browser data, verify acceptance/resources and only then restore automation. See README's migration runbook.
+- Issue #34 still requires direct app deletion/replacement despite the existing app already running the PWA in place.
+  Plan approval authorizes no production mutation; spending approval, independently tested recovery and immediate
+  exact-resource destruction confirmation are separate gates. With authorization, pause Fly Deploy/Release and drain
+  deployments before cutover merges. Preserve/test the current known-good PWA image outside the app registry and
+  securely establish configuration restoration; historical Phoenix artifacts are not the default recovery baseline.
+  App deletion deletes images/secrets too, and same-name reclamation is not guaranteed. Agree any fallback hostname/OAuth
+  changes, preserve browser data and save-safe worker updates, verify acceptance/resources and only then restore prior
+  automation. Readiness reviews must not probe app routes that could wake Machines. See README's migration runbook.
 
 ## Sibling repositories
 
