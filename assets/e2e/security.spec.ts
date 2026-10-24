@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 
 const PASS = "correct horse battery";
 
@@ -48,6 +48,58 @@ function disk(page: Page) {
     };
   });
 }
+/** A Dropbox account with an empty MarkNotes folder; deletions must never reach it. */
+async function fakeDropbox(context: BrowserContext): Promise<string[]> {
+  const deletions: string[] = [];
+  await context.route(
+    "https://www.dropbox.com/oauth2/authorize?**",
+    async (route) => {
+      const state = new URL(route.request().url()).searchParams.get("state");
+      await route.fulfill({
+        status: 302,
+        headers: {
+          location: `http://localhost:4000/oauth/dropbox?code=test-code&state=${state}`,
+        },
+      });
+    },
+  );
+  await context.route("https://**.dropboxapi.com/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const reply = (body: unknown) =>
+      route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify(body),
+        headers: { "access-control-allow-origin": "*" },
+      });
+    if (path.includes("delete")) deletions.push(path);
+    if (path.includes("oauth2/token"))
+      return reply({
+        access_token: "browser-only-token",
+        refresh_token: "browser-only-refresh",
+        expires_in: 14400,
+      });
+    if (path.endsWith("get_current_account"))
+      return reply({ email: "wipe@example.invalid", account_id: "wipe" });
+    if (path.endsWith("create_folder_v2"))
+      return reply({
+        metadata: {
+          ".tag": "folder",
+          id: "folder",
+          name: "MarkNotes",
+          path_display: "/MarkNotes",
+          path_lower: "/marknotes",
+        },
+      });
+    return reply({ entries: [], cursor: "cursor", has_more: false });
+  });
+  return deletions;
+}
+
+async function connectDropbox(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Connect Dropbox" }).click();
+  await page.getByRole("button", { name: "Use this folder" }).click();
+  await expect(page.locator("#accounts")).toContainText("wipe@example.invalid");
+}
 async function unlock(page: Page, passphrase: string): Promise<void> {
   await page.getByLabel("Passphrase", { exact: true }).fill(passphrase);
   await page.getByRole("button", { name: "Unlock" }).click();
@@ -89,12 +141,22 @@ test("passphrase lock encrypts notes at rest, unlocks, locks and is removable", 
   ).toBeVisible();
   expect((await disk(page)).text).not.toContain("LOCKED_SENTINEL_78");
 
+  await page.getByRole("button", { name: "Settings" }).click();
+  const security = page.locator("#security-settings");
+  await expect(security).toContainText("after 15 minutes");
+  await security.getByRole("radio", { name: "Off" }).click();
+  await expect(security).toContainText("stays unlocked");
+  await page.getByRole("button", { name: "Done" }).click();
+
   await settings(page, "Lock now");
   await expect(
     page.getByRole("heading", { name: "MarkNotes is locked" }),
   ).toBeVisible();
   await unlock(page, PASS);
   await expect(editor).toContainText("LOCKED_SENTINEL_78");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(security.getByRole("radio", { name: "Off" })).toBeChecked();
+  await page.getByRole("button", { name: "Done" }).click();
 
   await settings(page, "Remove passphrase");
   await page.getByRole("dialog").getByLabel("Current passphrase").fill(PASS);
@@ -149,6 +211,40 @@ test("forget this device removes every local note", async ({ page }) => {
   expect((await disk(page)).text).not.toContain("FORGET_SENTINEL");
 });
 
+test("disconnecting the last drive can also delete the notes on this device", async ({
+  page,
+  context,
+}) => {
+  const deletions = await fakeDropbox(context);
+  await page.goto("/");
+  await note(page, "Kept.md", "WIPE_SENTINEL");
+  await connectDropbox(page);
+  const disconnect = async () => {
+    await page
+      .getByRole("button", { name: "Options for wipe@example.invalid" })
+      .click();
+    await page.getByRole("menuitem", { name: "Disconnect" }).click();
+    return page.getByRole("dialog", { name: "Disconnect drive?" });
+  };
+  let dialog = await disconnect();
+  const option = dialog.getByLabel(
+    "Also delete the notes stored on this device",
+  );
+  await expect(option).not.toBeChecked();
+  await dialog.getByRole("button", { name: "Disconnect", exact: true }).click();
+  await expect(page.locator("#accounts")).toBeEmpty();
+  await expect(page.locator("#tree")).toContainText("Kept.md");
+
+  await connectDropbox(page);
+  dialog = await disconnect();
+  await option.check();
+  await expect(dialog).toContainText("Nothing is deleted from the drive");
+  await dialog.getByRole("button", { name: "Disconnect", exact: true }).click();
+  await expect(page.locator("#tree")).toContainText("No notes yet");
+  await expect(page.locator("#accounts")).toBeEmpty();
+  expect((await disk(page)).text).not.toContain("WIPE_SENTINEL");
+  expect(deletions).toEqual([]);
+});
 test("links to a script-free security page", async ({ page }) => {
   await page.goto("/");
   const link = page

@@ -804,6 +804,20 @@ a {
   align-items: center;
   gap: 8px;
 }
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--danger);
+}
 .segmented {
   display: inline-flex;
   padding: 3px;

@@ -2,6 +2,12 @@ defmodule MarknotesWeb.PrivacyHeaders do
   @moduledoc false
   import Plug.Conn
 
+  # The app needs no device or sensor APIs; deny them to the page and to every frame it loads.
+  @permissions_policy ~w(
+    accelerometer autoplay bluetooth browsing-topics camera display-capture geolocation gyroscope hid
+    magnetometer microphone midi payment publickey-credentials-get serial usb xr-spatial-tracking
+  ) |> Enum.map_join(", ", &"#{&1}=()")
+
   def init(opts), do: opts
 
   def call(conn, _opts) do
@@ -10,6 +16,7 @@ defmodule MarknotesWeb.PrivacyHeaders do
     |> put_resp_header("referrer-policy", "no-referrer")
     |> put_resp_header("x-content-type-options", "nosniff")
     |> put_resp_header("content-security-policy", policy())
+    |> put_resp_header("permissions-policy", @permissions_policy)
   end
 
   # Browser code talks only to this origin (LiveView socket) and the provider APIs it syncs with; see

@@ -66,7 +66,9 @@ the tab; a failed/stale save leaves the text in the editor and displays an error
 Connect a drive and browse to the same folder used by Android/desktop. By default the picker creates/uses a `MarkNotes`
 child folder; uncheck that option to sync the selected folder itself. A new connection is reconciled with **Sync now**.
 All accounts mirror the same local tree; they are not independent notebooks. Disconnect removes only that connection's
-local credentials/history, not local notes or provider-side app authorization.
+local credentials/history, not local notes or provider-side app authorization. When disconnecting the last drive, the
+dialog offers **Also delete the notes stored on this device**, which also forgets this device; nothing on the drive is
+deleted.
 
 Sync follows initial listings with Dropbox cursors / Microsoft Graph delta feeds, not background polling. Per-drive
 sync records persist locally. The remote `.marknotes/manifest.json` has `format: 1`, `app: "MarkNotes"`,
@@ -97,11 +99,12 @@ folder, as `blob:` URLs. Code blocks are highlighted locally.
 OAuth callbacks are minimal client pages, not LiveViews, and authorization parameters are filtered from Phoenix logs.
 By default notes are kept unencrypted in IndexedDB. Provider credentials are encrypted with a key that cannot be exported,
 but that key is stored beside them. Settings › Privacy and security offers two other modes:
-- **Encrypted with a passphrase:** PBKDF2 → AES-256-GCM; names are hidden on disk. The app auto-locks after 15 minutes.
+- **Encrypted with a passphrase:** PBKDF2 → AES-256-GCM; names are hidden on disk. The app auto-locks after 15 idle minutes (or 5, 60, off).
 - **Memory only:** nothing is written to the browser.
 
 It also offers **Forget this device**. The browser may only connect to this origin and the Dropbox and Microsoft
-endpoints it syncs with (CSP `connect-src`). No mode defends against same-origin XSS while unlocked.
+endpoints it syncs with (CSP `connect-src`). A `Permissions-Policy` denies device and sensor APIs, and the session
+cookie is `Secure` and `HttpOnly` in production. No mode defends against same-origin XSS while unlocked.
 See [docs/security.md](docs/security.md) (threat model, why notes are not cached on the server, residual risks) and
 the in-app `/security` page. Clearing site data or browser profiles removes notes and credentials; there is no
 server-side recovery. Private browsing may limit storage. WebCrypto, IndexedDB and Web Locks support are required

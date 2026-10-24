@@ -8,7 +8,10 @@ defmodule MarknotesWeb.Endpoint do
     store: :cookie,
     key: "_marknotes_key",
     signing_salt: "RkFSBW80",
-    same_site: "Lax"
+    same_site: "Lax",
+    # Only false in dev and test, which are served over plain http.
+    secure: Application.compile_env(:marknotes, :secure_cookie, true),
+    http_only: true
   ]
 
   socket "/live", Phoenix.LiveView.Socket,
