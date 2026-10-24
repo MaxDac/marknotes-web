@@ -216,7 +216,10 @@ changing a master SVG, regenerate them with `cd branding && npm install --no-pac
   "actionlint" (workflow lint, including shellcheck of `run:` scripts).
 - `codeql.yml` runs CodeQL for `javascript-typescript` and `actions` on pull requests, pushes to `main` and weekly
   with no BEAM toolchain.
-- `dependabot-automerge.yml` enables squash auto-merge for Dependabot semver patch/minor updates; majors stay manual.
+- PR CI and CodeQL accept every pull-request base branch so dependent PRs in a stack receive required checks.
+  Push-triggered deployment and Dependabot auto-merge remain restricted to `main`.
+- `dependabot-automerge.yml` enables squash auto-merge for unstacked Dependabot semver patch/minor updates triggered
+  by Dependabot itself; majors, stacked PRs and human-maintained updates stay manual.
   Requires "Allow auto-merge" in the repository settings; merges still wait for the required checks.
 - `fly.yml` runs the checks on every push to `main` and deploys to Fly.io if they pass.
 - `release.yml` is started manually on `main` (other refs are rejected) with a `version` (`X.Y.Z`) and a `prerelease`
