@@ -1688,3 +1688,115 @@ a {
 #pwa-status p {
   margin: 0;
 }
+
+.marknotes-guide.driver-popover {
+  z-index: 1000000002;
+  max-width: min(360px, calc(100vw - 32px));
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  background: var(--panel);
+  color: var(--fg);
+  font-family: inherit;
+}
+.marknotes-guide .driver-popover-title {
+  padding-right: 48px;
+}
+.marknotes-guide .driver-popover-close-btn {
+  width: auto;
+  min-height: 36px;
+  padding: 4px 8px;
+  font-size: 0.85rem;
+  color: var(--fg);
+}
+.marknotes-guide .driver-popover-description,
+.marknotes-guide .driver-popover-progress-text {
+  color: var(--fg);
+}
+.marknotes-guide button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+.marknotes-guide .driver-popover-footer-btn {
+  min-width: 44px;
+  min-height: 36px;
+  padding: 6px 12px;
+}
+.guide-center {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.guide-active .sidebar {
+  transition: none;
+}
+.guide-practice {
+  position: fixed;
+  inset: 40dvh 16px auto;
+  z-index: 1000000001;
+  width: min(760px, calc(100vw - 32px));
+  max-height: 55dvh;
+  margin: 0 auto;
+  padding: 16px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--fg);
+}
+.guide-practice[hidden] {
+  display: none;
+}
+.guide-practice h2 {
+  margin-top: 0;
+}
+.guide-practice-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.guide-practice-panes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.guide-practice-panes > * {
+  max-height: 32dvh;
+  min-width: 0;
+  overflow: auto;
+}
+.guide-practice-panes[data-view="edit"],
+.guide-practice-panes[data-view="preview"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.markdown-help {
+  width: min(820px, calc(100vw - 32px));
+}
+.markdown-example pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.help-preview {
+  padding: 12px;
+  border-left: 3px solid var(--line);
+}
+@media (max-width: 860px) {
+  .guide-practice-panes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .guide-practice {
+    inset-block-start: 45dvh;
+    max-height: 50dvh;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
+  }
+}

@@ -1,4 +1,4 @@
-import { test, expect, type Page, type BrowserContext } from "@playwright/test";
+import { test, expect, type Page, type BrowserContext } from "./fixtures";
 
 async function setting(page: Page, enabled: boolean): Promise<void> {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
@@ -155,6 +155,29 @@ async function fixture(page: Page, context: BrowserContext) {
     },
   };
 }
+
+test("an offline provider does not block local editing after the guide is handled", async ({
+  page,
+  context,
+}) => {
+  const drive = await fixture(page, context);
+  await context.setOffline(true);
+  await page.reload();
+  await expect(page.locator("#workspace")).toBeEnabled();
+  await expect(page.locator("#accounts")).toContainText(
+    "drive-0@example.invalid",
+  );
+  await page
+    .getByRole("button", { name: "Create a note", exact: true })
+    .click();
+  await page.getByRole("dialog").getByRole("textbox").fill("Offline local");
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await page
+    .getByRole("textbox", { name: "Markdown editor" })
+    .fill("Saved locally with an offline provider");
+  await expect(page.locator("#status")).toHaveText("Saved in this browser");
+  expect(drive.snapshots()).toBe(0);
+});
 
 test("reconnect is opt-in, saves offline edits first and never sends private data to the app server", async ({
   page,

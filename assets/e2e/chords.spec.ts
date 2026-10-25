@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./fixtures";
 
 async function setChords(page: Page, on: boolean): Promise<void> {
   await page.getByRole("button", { name: "Settings" }).click();

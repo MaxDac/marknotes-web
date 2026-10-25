@@ -1,4 +1,4 @@
-import { test, expect, type BrowserContext, type Page } from "@playwright/test";
+import { test, expect, type BrowserContext, type Page } from "./fixtures";
 
 /** A Dropbox account that keeps the folders it is asked to create; it records every delete request. */
 async function folderDropbox(context: BrowserContext): Promise<string[]> {

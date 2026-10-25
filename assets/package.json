@@ -24,6 +24,7 @@
     "@marknotes/sync": "git+https://github.com/MaxDac/marknotes-sync.git#48bdbdeda451963154d3a8defb7efc0d9a6f4cbb",
     "codemirror": "^6.0.2",
     "dompurify": "^3.3.0",
+    "driver.js": "1.10.2",
     "highlight.js": "^11.11.0",
     "idb": "^8.0.3",
     "mammoth": "^1.13.0",

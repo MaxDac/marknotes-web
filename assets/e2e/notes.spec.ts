@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./fixtures";
 async function submit(page: Page, value: string): Promise<void> {
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("textbox").fill(value);
@@ -667,6 +667,7 @@ test("Dropbox rejects a mismatched OAuth state without exchanging tokens", async
 test("menus, dialogs and settings work from the keyboard", async ({ page }) => {
   await page.goto("/");
   const trigger = page.getByRole("button", { name: "New", exact: true });
+  await trigger.click({ trial: true });
   await trigger.focus();
   await page.keyboard.press("ArrowDown");
   await expect(page.getByRole("menuitem", { name: "New note" })).toBeFocused();
