@@ -51,7 +51,23 @@ describe("HTML conversion", () => {
       /!\[Remote|javascript:|onerror|onclick|iframe|fetch|file:/,
     );
     expect(converted.warnings.join(" ")).toContain("links");
+    expect(converted.warnings.join(" ")).toContain("Scripts");
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps note and mail links but drops handlers and other schemes", async () => {
+    const body = importBody(
+      await importHtml(
+        '<details open ontoggle="alert(1)"><summary>Box</summary>Inside</details>' +
+          '<p><a href="marknotes:abc123">Note</a> <a href="mailto:a@b.c">Mail</a> ' +
+          '<a href="data:text/html,x">Data</a> <a href="vbscript:x">VB</a></p>',
+      ),
+      true,
+    );
+    expect(body).toContain("[Note](marknotes:abc123)");
+    expect(body).toContain("[Mail](mailto:a@b.c)");
+    expect(body).toContain("Inside");
+    expect(body).not.toMatch(/ontoggle|alert|data:|vbscript:/);
   });
 
   it("keeps HTML as plain text, preferring the plain text shared with it (Android parity)", async () => {

@@ -1,3 +1,4 @@
+import DOMPurify from "dompurify";
 import TurndownService from "turndown";
 import {
   ACCEPTED_TYPES,
@@ -100,6 +101,32 @@ export function importText(text: string): ImportedDocument {
 }
 
 const SAFE_HREF = /^(https?:|mailto:|marknotes:|#)/i;
+const ACTIVE_TAGS = new Set([
+  "script",
+  "style",
+  "noscript",
+  "template",
+  "iframe",
+  "frame",
+  "frameset",
+  "object",
+  "embed",
+  "link",
+  "meta",
+  "base",
+  "form",
+  "input",
+  "button",
+  "select",
+  "textarea",
+  "svg",
+  "math",
+  "audio",
+  "video",
+  "source",
+  "picture",
+  "canvas",
+]);
 const WEB_IMAGE = /^https?:\/\//i;
 const DATA_IMAGE =
   /^data:(image\/(?:png|jpeg|gif|webp));base64,([a-z0-9+/=\s]+)$/i;
@@ -161,22 +188,27 @@ export async function importHtml(
   plain?: string,
 ): Promise<ImportedDocument> {
   sizeLimit(new TextEncoder().encode(html).length, MAX_DOCUMENT_BYTES, "HTML");
-  // A parsed document has no browsing context: scripts don't run and images aren't fetched. Every node stays in it,
-  // since adopting an <img> into this page's document would start loading its src.
-  const inert = new DOMParser().parseFromString(html, "text/html");
+  // Sanitized first, then parsed into a document with no browsing context, where nothing loads or runs. Every node
+  // stays in it, since adopting an <img> into this page's document would start loading its src.
+  const sanitizer = DOMPurify(window);
+  const clean = sanitizer.sanitize(html, {
+    ALLOWED_URI_REGEXP:
+      /^(?:(?:https?|mailto|marknotes):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i,
+    FORBID_TAGS: [...ACTIVE_TAGS],
+  });
+  const inert = new DOMParser().parseFromString(clean, "text/html");
   const content = inert.body;
   const result: ImportedDocument = { parts: [], images: [], warnings: [] };
-  const removed = content.querySelectorAll(
-    "script,style,noscript,template,iframe,frame,object,embed,link,meta,base,form,input,button,select,textarea,svg,math,audio,video,source,picture>source,canvas",
-  );
-  if (removed.length)
+  if (
+    sanitizer.removed.some(
+      (entry) =>
+        "element" in entry &&
+        ACTIVE_TAGS.has(entry.element.nodeName.toLowerCase()),
+    )
+  )
     result.warnings.push(
       "Scripts, styles, forms and embedded media were removed.",
     );
-  removed.forEach((node) => node.remove());
-  for (const element of content.querySelectorAll("*"))
-    for (const attribute of [...element.attributes])
-      if (/^on/i.test(attribute.name)) element.removeAttribute(attribute.name);
   for (const img of content.querySelectorAll("img")) {
     const src = img.getAttribute("src")?.trim() ?? "";
     const alt = img.getAttribute("alt")?.trim() ?? "";
