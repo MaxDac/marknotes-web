@@ -116,6 +116,12 @@ const formatting: [string, IconName | string, string, string][] = [
   ["Checklist", "checklist", "- [ ] ", ""],
   ["Quote", "quote", "> ", ""],
 ];
+type ViewMode = "edit" | "split" | "preview";
+const VIEW_CHOICES: { value: ViewMode; label: string }[] = [
+  { value: "edit", label: "Edit" },
+  { value: "split", label: "Split" },
+  { value: "preview", label: "Preview" },
+];
 
 /** Locked browsers lock themselves again after this much inactivity. */
 const AUTO_LOCK_DEFAULT = 15;
@@ -156,6 +162,8 @@ export class NotesUI {
   private chordEditor?: ChordEditor;
   /** The user chose "View as text" for the open chord sequence. */
   private textView = false;
+  /** Edit / Split / Preview, as on Desktop: not persisted, back to Split for each opened note. */
+  private view: ViewMode = "split";
   /** Settings → Chord sequences: off by default, stored only in this browser. */
   private chordsEnabled = false;
   private current?: Note;
@@ -259,6 +267,7 @@ export class NotesUI {
           </header>
           <div class="toolbar">
             <nav id="formatting" class="formatting" aria-label="Formatting"></nav>
+            <div id="view-switch" class="view-switch"></div>
             <div id="mode-slot" class="mode-slot"></div>
             <div id="item-actions" class="item-actions"></div>
           </div>
@@ -335,6 +344,7 @@ export class NotesUI {
         id: "view-mode",
       }),
     );
+    this.setView(this.view);
     const act = (action: () => Promise<void>) => () => {
       void this.run(action);
     };
@@ -1141,6 +1151,19 @@ export class NotesUI {
     this.applyChordSetting();
     return true;
   }
+  /** Shows the editor, the preview or both; Preview also hides the formatting toolbar. */
+  private setView(view: ViewMode, rebuild = true): void {
+    this.view = view;
+    this.get("#main").dataset.view = view;
+    if (rebuild)
+      this.get("#view-switch").replaceChildren(
+        segmented("View", VIEW_CHOICES, view, (next) =>
+          this.setView(next as ViewMode, false),
+        ),
+      );
+    if (view === "preview") this.closeMention();
+    else this.editor.requestMeasure();
+  }
   private async toggleView(): Promise<void> {
     if (!this.current || this.busy) return;
     const chords = this.get("#main").classList.contains("chord-mode");
@@ -1560,7 +1583,10 @@ export class NotesUI {
     this.selected = note ? path : "";
     this.current = note?.folder ? undefined : note;
     this.dirty = false;
-    if (!same) this.textView = false;
+    if (!same) {
+      this.textView = false;
+      this.setView("split");
+    }
     this.showEditor(this.current?.text ?? "", same);
     this.setEditable(!!this.current && !this.busy);
     await this.store.put("active-note", this.current?.path ?? "");
