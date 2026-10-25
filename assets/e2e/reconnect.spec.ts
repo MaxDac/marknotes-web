@@ -474,6 +474,12 @@ test("partial multi-drive failures preserve successful drives without retrying a
   await expect(page.locator("#status")).toContainText("error");
   await expect(page.locator("#accounts .account-icon.ok")).toHaveCount(1);
   await expect(page.locator("#accounts .account-icon.error")).toHaveCount(1);
+  await expect(
+    page.locator("#accounts .account:has(.account-icon.ok) .account-synced"),
+  ).toContainText("Last sync:");
+  await expect(
+    page.locator("#accounts .account:has(.account-icon.error) .account-synced"),
+  ).toHaveCount(0);
   const previous = drive.snapshots();
   await reconnect(context);
   await page.clock.runFor(2_000);

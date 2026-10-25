@@ -9,6 +9,7 @@ import {
 import { inAttachments } from "./attachments";
 import { idsToAssign, newId, newNoteText, withId } from "./notemeta";
 import { foldCase } from "@marknotes/sync";
+import { Diagnostics } from "./diagnostics";
 
 export interface Note {
   path: string;
@@ -78,6 +79,7 @@ function reserved(path: string): void {
 }
 
 export class Store {
+  readonly diagnostics: Diagnostics;
   /**
    * @param vaultKey encrypts provider credentials when the tree is memory-backed (locked or memory-only browsers);
    * otherwise a non-extractable key is generated and kept in IndexedDB.
@@ -85,11 +87,14 @@ export class Store {
   constructor(
     readonly backend: Backend,
     readonly vaultKey?: CryptoKey,
-  ) {}
+  ) {
+    this.diagnostics = new Diagnostics(backend);
+  }
   static async open(name = "marknotes"): Promise<Store> {
     return new Store(new IdbBackend(await openDatabase(name)));
   }
   close(): void {
+    this.diagnostics.close();
     this.backend.close();
   }
   private read<T>(
@@ -462,6 +467,13 @@ export class Store {
   }
   async accounts(): Promise<Account[]> {
     return (await this.value<Account[]>("accounts")) ?? [];
+  }
+  /** When the account's drive last finished a sync pass without errors (epoch ms); cleared by `forgetAccount`. */
+  async lastSync(id: string): Promise<number | undefined> {
+    return this.value<number>(`${id}:last-sync`);
+  }
+  async recordSync(id: string, at: number): Promise<void> {
+    await this.put(`${id}:last-sync`, at);
   }
   async saveAccount(account: Account): Promise<void> {
     await this.change(["values"], async (tx) => {

@@ -116,6 +116,34 @@
         </p>
       </section>
 
+      <section aria-labelledby="diagnostics">
+        <h2 id="diagnostics">Local diagnostics and problem reports</h2>
+        <p>
+          Settings offers Local diagnostics: only fixed error codes, categories
+          and times are logged, never notes, paths, identifiers, credentials,
+          raw error messages or stack traces. Logs and the latest export
+          snapshot share a seven-day and 5 MiB limit, pruned on startup, write,
+          review and export. Pruning cannot run while closed or locked.
+        </p>
+        <p>
+          Diagnostics follow your storage mode: encrypted with your passphrase,
+          or memory only. Nothing is recorded before storage is available or
+          while locked, and there is no unencrypted fallback if logging fails.
+          Clear logs and Forget this device remove local logs and snapshots.
+          Export logs works offline. Downloaded files are outside app storage;
+          delete those yourself.
+        </p>
+        <p>
+          Report a problem shows a sanitized excerpt for review and requires
+          explicit consent before opening a GitHub issue draft for this app. The
+          complete encoded URL is limited to 2,000 ASCII characters, with whole
+          records only and an indication when older records are omitted. Opening
+          the draft already sends the excerpt to GitHub before you submit the
+          issue, and can leave it in browser history. Nothing is sent
+          automatically; you submit the issue yourself.
+        </p>
+      </section>
+
       <section aria-labelledby="network">
         <h2 id="network">What the app may connect to</h2>
 
