@@ -193,6 +193,61 @@ export function format(view: EditorView, before: string, after = before): void {
   view.focus();
 }
 
+/** Cycles the current line through no heading → `#` → `##` → `###` → no heading (H4–H6 go back to none). */
+export function cycleHeading(view: EditorView): void {
+  if (view.state.readOnly) return;
+  const { state } = view;
+  const line = state.doc.lineAt(state.selection.main.from);
+  const current = /^(#{1,6}) /.exec(line.text);
+  const level = current?.[1].length ?? 0;
+  const changes = state.changes({
+    from: line.from,
+    to: line.from + (current?.[0].length ?? 0),
+    insert: level >= 3 ? "" : `${"#".repeat(level + 1)} `,
+  });
+  view.dispatch({ changes, selection: state.selection.map(changes, 1) });
+  view.focus();
+}
+
+const lineMarker = /^(?:[-*+] \[[ xX]\](?: |$)|[-*+] |\d{1,9}[.)] |> ?)/;
+
+/**
+ * Numbers the selected lines (or the current line) as `1. `, `2. `…, replacing other list, checkbox
+ * or quote markers and skipping blank lines; removes the numbers when every line is already numbered.
+ */
+export function numberedList(view: EditorView): void {
+  if (view.state.readOnly) return;
+  const { state } = view;
+  const { from, to } = state.selection.main;
+  const first = state.doc.lineAt(from);
+  // A selection ending at the start of a line does not include that line.
+  const last = state.doc.lineAt(
+    to > from && state.doc.lineAt(to).from === to ? to - 1 : to,
+  );
+  const lines = Array.from({ length: last.number - first.number + 1 }, (_, i) =>
+    state.doc.line(first.number + i),
+  );
+  const nonBlank = lines.filter((line) => line.text.trim());
+  const remove = (nonBlank.length ? nonBlank : lines).every((line) =>
+    /^[ \t]*\d{1,9}[.)] /.test(line.text),
+  );
+  let number = 1;
+  const changes = state.changes(
+    lines.map((line) => {
+      const indent = /^[ \t]*/.exec(line.text)![0].length;
+      const marker = lineMarker.exec(line.text.slice(indent))?.[0] ?? "";
+      const blank = lines.length > 1 && !line.text.trim();
+      return {
+        from: line.from + indent,
+        to: line.from + indent + marker.length,
+        insert: remove || blank ? "" : `${number++}. `,
+      };
+    }),
+  );
+  view.dispatch({ changes, selection: state.selection.map(changes, 1) });
+  view.focus();
+}
+
 /** Inserts `text` at `position` (or replacing the selection) and places the cursor after it. */
 export function insert(
   view: EditorView,
