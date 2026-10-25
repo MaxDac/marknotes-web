@@ -43,6 +43,8 @@ function headerJson(value: unknown): string {
   );
 }
 export class Dropbox implements Drive {
+  /** Dropbox deletes folders recursively: folders deleted here are kept and the user removes them by hand. */
+  readonly remoteFolderDeletion = "unsupported";
   private entries = new Map<string, Entry>();
   private cursor?: string;
   private rootReady = false;
@@ -339,6 +341,8 @@ function graphTime(node: GraphItem): number | undefined {
   );
 }
 export class OneDrive implements Drive {
+  /** Graph deletes folders recursively: folders deleted here are kept and the user removes them by hand. */
+  readonly remoteFolderDeletion = "unsupported";
   private rootId?: string;
   private nodes = new Map<string, GraphItem>();
   private delta?: string;

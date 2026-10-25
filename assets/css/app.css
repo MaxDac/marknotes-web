@@ -385,6 +385,17 @@ a {
   color: var(--hint);
   font-size: 12px;
 }
+.account-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 0 10px 6px 52px;
+}
+.account-notice p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
 .badge {
   margin-left: auto;
   padding: 1px 8px;

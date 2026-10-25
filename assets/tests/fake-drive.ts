@@ -12,6 +12,9 @@ export class FakeDrive implements Remote {
   fail = false;
   /** Paths whose upload fails. */
   failing = new Set<string>();
+  remoteFolderDeletion?: "atomicEmptyOnly" | "unsupported";
+  /** When false, like Dropbox and OneDrive, folder deletes fail before changing anything. */
+  supportsEmptyDelete = true;
   /** Runs after the engine listed the local tree, before it plans: simulates an edit racing the sync. */
   onSnapshot?: () => Promise<void>;
   /** Runs before a download returns: simulates an edit racing the apply step. */
@@ -74,6 +77,8 @@ export class FakeDrive implements Remote {
   }
   /** Like the real drives, file deletes are conditional on the snapshot revision. */
   async delete(entry: Entry): Promise<void> {
+    if (entry.folder && !this.supportsEmptyDelete)
+      throw new Error("Atomic empty-only folder deletion is unsupported");
     if (
       entry.folder &&
       [...this.data.keys()].some((p) => p.startsWith(`${entry.path}/`))

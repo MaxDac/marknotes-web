@@ -182,9 +182,14 @@ OneDrive `If-Match`), so a file changed elsewhere meanwhile is kept and download
 hashed as bytes, so a UTF-8 byte order mark is kept and an unedited note is never rewritten on the drive.
 New files, conflicted copies and planned folders are created without replacing or adopting a destination created
 by another device after listing; a collision is reported and reconciled on the next sync. Parent-folder provisioning
-may reuse existing folders. Dropbox and OneDrive do not provide the atomic, non-recursive folder deletion this
-client requires: remote folder deletion therefore reports an error and retains the folder and its sync history,
-instead of risking deletion of an unseen child. Known unchanged files may still be deleted conditionally.
+may reuse existing folders. Dropbox and OneDrive do not provide the atomic, empty-only folder deletion this
+client requires, so they declare `remoteFolderDeletion: unsupported` and a folder deleted here is kept on the drive
+instead of risking deletion of an unseen child. The sync keeps its history marked as preserved and shows a one-time
+notice under the drive (**Got it** acknowledges it durably) asking you to remove the folder there by hand; the notice
+is not repeated on later syncs or reloads. New or changed content in the folder, an empty new subfolder or a
+replacement folder brings it back; recreating it here retires the old history on every drive first, and a later
+deletion gives a new notice. Folder records and notices are stored with the notes (encrypted with a passphrase,
+memory only in memory-only mode). Known unchanged files may still be deleted conditionally.
 Record-proven stale case-only spellings converge without changing content edit times. Ambiguous or edited stale
 spellings remain errors. Only the current drive's record/base paths migrate after a successful rename; revision
 and content hashes remain unchanged so a racing remote edit is detected by the next fresh plan.

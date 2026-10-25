@@ -190,6 +190,49 @@ const mappings: Record<string, Mapping> = {
  */
 const pending: Record<string, string> = {};
 
+/**
+ * Cases marknotes-spec still records as `knownDivergence.web` that the web app now satisfies, as `file::case`. They
+ * are asserted equal. TODO: remove each entry once marknotes-spec drops the divergence.
+ */
+const resolved = new Set(
+  [
+    "a failed child download after ancestor replacement cannot restore stale deletion authority on restart",
+    "an explicitly unsupported removal preserves the folder with one notice and no recursive request",
+    "a pending manual-removal notice survives restart without folder resurrection or repeat actions",
+    "an acknowledged notice is not issued again after restart",
+    "a new remote child revives a preserved folder and is downloaded",
+    "a changed recorded remote child wins over preserved folder deletion",
+    "an ignored descendant protects a preserved folder without being downloaded",
+    "a new empty remote subfolder revives its preserved parent",
+    "local recreation permits a new notice for a later deletion of the same identity",
+    "local recreation with a missing remote counterpart creates remote instead of deleting local",
+    "remote disappearance retires the retained folder record and active notice",
+    "a replacement remote folder and descendant are not suppressed by an old deletion identity",
+    "two drives deduplicate independently and local recreation retires both histories before planning",
+    "new safe deletion support removes the retained folder and retires its notice",
+    "a failed listing cannot retire deferred state or imply remote disappearance",
+    "restart before preservation commits retries without losing the deletion baseline",
+    "restart after preservation commits keeps the pending notice without a duplicate",
+    "a failed preservation save is an explicit error and the next restart safely retries",
+    "a failed acknowledgement save leaves the same notice pending across restart",
+    "restart after recreation preflight cannot delete the restored folder",
+    "an unsupported provider does not hide a conditional child deletion failure",
+    "unchanged preserved subfolders do not resurrect their preserved parent",
+    "local recreation after planning prevents a stale preservation action",
+  ]
+    .map((name) => `sync/executor-safety::${name}`)
+    .concat(
+      [
+        "a local parent case rename migrates a remote-only preserved descendant",
+        "a drive parent case rename migrates a remote-only preserved descendant",
+        "unsupported empty folder deletion preserves history instead of requesting removal",
+        "an unchanged preserved remote folder produces no repeat action",
+        "a preserved folder replacement is new remote content",
+        "both present folders clear a preserved marker by recording",
+      ].map((name) => `sync/plan::${name}`),
+    ),
+);
+
 function fixtureFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const path = join(dir, entry.name);
@@ -228,6 +271,17 @@ describe("marknotes-spec fixtures", () => {
     expect(Object.keys(pending).filter((key) => !cases.has(key))).toEqual([]);
   });
 
+  it("lists only cases with a web divergence as resolved", () => {
+    const divergent = new Set(
+      files.flatMap((file) =>
+        load(file)
+          .cases.filter((c) => c.knownDivergence?.web)
+          .map((c) => `${file}::${c.name}`),
+      ),
+    );
+    expect([...resolved].filter((key) => !divergent.has(key))).toEqual([]);
+  });
+
   for (const file of files) {
     const mapping = mappings[file];
     if (!mapping) continue;
@@ -240,7 +294,7 @@ describe("marknotes-spec fixtures", () => {
         const divergence = c.knownDivergence?.web;
         const todo = pending[`${file}::${c.name}`];
         if (todo) it.skip(`${c.name} — TODO: ${todo}`, () => {});
-        else if (divergence)
+        else if (divergence && !resolved.has(`${file}::${c.name}`))
           it(`${c.name} (known divergence: ${divergence})`, async () => {
             expect(await mapping(c.input)).not.toEqual(c.expected);
           });

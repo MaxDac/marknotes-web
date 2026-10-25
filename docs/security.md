@@ -11,7 +11,7 @@ only measures that ship.
 | --- | --- |
 | Note text, note/folder names, images | Browser (IndexedDB or memory), the user's drives |
 | Drive OAuth tokens (Dropbox refresh token, Microsoft tokens) | Browser credential store; MSAL keeps its own cache in memory |
-| Sync state (per-drive records, three-way-merge base copies, cursors) | Browser, next to the notes |
+| Sync state (per-drive records, three-way-merge base copies, cursors, manual folder-removal notices) | Browser, next to the notes |
 | App code | Served by Caddy (Fly.io), cached as a public offline PWA shell |
 
 Threats considered: a breached or malicious server; another person or malware reading the browser profile on disk
