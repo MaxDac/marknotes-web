@@ -32,7 +32,8 @@ other platforms** (opened in a new tab only when clicked).
   delete and move notes and folders, and a sidebar shows the folder tree. Note content is never sent to the MarkNotes server.
   There is no persistent server connection. After offline preparation succeeds, you can reopen and edit without a network.
 - **Editor**: raw markdown (CodeMirror 6) with a client-side preview (tables, strikethrough, task lists, highlighted code
-  blocks). It has a formatting toolbar, continues lists, checkboxes and quotes on Enter, and autosaves. An
+  blocks). Its formatting toolbar includes strikethrough and numbered lists, and Heading cycles the current line through
+  plain text → H1 → H2 → H3 → plain text. It continues lists, checkboxes and quotes on Enter, and autosaves. An
   Edit / Split / Preview switch shows the editor, both side by side (stacked on narrow screens) or the preview alone;
   as on desktop, each opened note starts in Split.
 - **Note links**: type `@` to pick a note from a panel listing every note's title, path and stable id (with a copy

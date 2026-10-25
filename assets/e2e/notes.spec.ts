@@ -312,6 +312,33 @@ test("switches between Edit, Split and Preview like the desktop app", async ({
   await expect(editor).toBeHidden();
   await expect(article).toBeVisible();
 });
+test("toolbar strikethrough, numbered list and heading cycle", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await create(page, "New note", "Toolbar.md");
+  const editor = page.getByRole("textbox", { name: "Markdown editor" });
+  const heading = page.getByRole("button", { name: "Heading", exact: true });
+  await editor.fill("Title");
+  await editor.press("End");
+  for (const prefix of ["# ", "## ", "### ", ""]) {
+    await heading.click();
+    await expect(editor).toHaveText(`${prefix}Title`);
+  }
+  await editor.press("ControlOrMeta+a");
+  await page
+    .getByRole("button", { name: "Strikethrough", exact: true })
+    .click();
+  await expect(editor).toHaveText("~~Title~~");
+  await expect(page.locator("#preview s")).toHaveText("Title");
+  await editor.fill("one\ntwo");
+  await editor.press("ControlOrMeta+a");
+  await page
+    .getByRole("button", { name: "Numbered list", exact: true })
+    .click();
+  await expect(editor.locator(".cm-line")).toHaveText(["1. one", "2. two"]);
+  await expect(page.locator("#preview ol li")).toHaveText(["one", "two"]);
+});
 test("Dropbox PKCE popup and direct browser sync", async ({
   page,
   context,
