@@ -463,6 +463,13 @@ export class Store {
   async accounts(): Promise<Account[]> {
     return (await this.value<Account[]>("accounts")) ?? [];
   }
+  /** When the account's drive last finished a sync pass without errors (epoch ms); cleared by `forgetAccount`. */
+  async lastSync(id: string): Promise<number | undefined> {
+    return this.value<number>(`${id}:last-sync`);
+  }
+  async recordSync(id: string, at: number): Promise<void> {
+    await this.put(`${id}:last-sync`, at);
+  }
   async saveAccount(account: Account): Promise<void> {
     await this.change(["values"], async (tx) => {
       const accounts = (await tx.get("values", "accounts")) as
