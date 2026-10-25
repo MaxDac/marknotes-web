@@ -262,6 +262,55 @@ test("continues markdown lists and safely renders preview", async ({
   await expect(page.locator("#preview img")).toHaveCount(0);
   expect(await page.evaluate(() => "bad" in window)).toBe(false);
 });
+test("switches between Edit, Split and Preview like the desktop app", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await create(page, "New note", "Views.md");
+  const editor = page.getByRole("textbox", { name: "Markdown editor" }),
+    article = page.getByRole("article", { name: "Markdown preview" }),
+    views = page.getByRole("radiogroup", { name: "View" }),
+    bold = page.getByRole("button", { name: "Bold" });
+  await editor.fill("# Viewed");
+  await expect(views.getByRole("radio", { name: "Split" })).toBeChecked();
+  await expect(editor).toBeVisible();
+  await expect(article.locator("h1")).toHaveText("Viewed");
+  const split = await article.boundingBox();
+
+  await views.getByRole("radio", { name: "Preview" }).click();
+  await expect(editor).toBeHidden();
+  await expect(bold).toBeHidden();
+  await expect(article.locator("h1")).toHaveText("Viewed");
+  expect((await article.boundingBox())!.width).toBeGreaterThan(
+    split!.width * 1.5,
+  );
+
+  await views.getByRole("radio", { name: "Preview" }).press("ArrowLeft");
+  await expect(views.getByRole("radio", { name: "Split" })).toBeChecked();
+  await views.getByRole("radio", { name: "Edit" }).click();
+  await expect(article).toBeHidden();
+  await expect(bold).toBeVisible();
+  await editor.press("End");
+  await editor.pressSequentially(" again");
+  await views.getByRole("radio", { name: "Split" }).click();
+  await expect(article.locator("h1")).toHaveText("Viewed again");
+
+  // Like the desktop app, the choice is not persisted: each opened note starts in Split.
+  await views.getByRole("radio", { name: "Preview" }).click();
+  await create(page, "New note", "Other.md");
+  await expect(views.getByRole("radio", { name: "Split" })).toBeChecked();
+  await expect(editor).toBeVisible();
+  await expect(article).toBeVisible();
+
+  // Narrow screens stack Split vertically and still offer every view.
+  await page.setViewportSize({ width: 390, height: 800 });
+  const top = (await editor.boundingBox())!,
+    below = (await article.boundingBox())!;
+  expect(below.y).toBeGreaterThanOrEqual(top.y + top.height - 1);
+  await views.getByRole("radio", { name: "Preview" }).click();
+  await expect(editor).toBeHidden();
+  await expect(article).toBeVisible();
+});
 test("Dropbox PKCE popup and direct browser sync", async ({
   page,
   context,
