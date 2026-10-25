@@ -294,6 +294,7 @@ test("switches between Edit, Split and Preview like the desktop app", async ({
   await editor.pressSequentially(" again");
   await views.getByRole("radio", { name: "Split" }).click();
   await expect(article.locator("h1")).toHaveText("Viewed again");
+  await expect(page.locator("#status")).toHaveText("Saved in this browser");
 
   // Like the desktop app, the choice is not persisted: each opened note starts in Split.
   await views.getByRole("radio", { name: "Preview" }).click();
