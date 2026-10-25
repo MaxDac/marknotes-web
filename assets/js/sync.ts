@@ -246,10 +246,7 @@ export class SyncEngine {
       remote: [...this.entries.values()].map(toCore),
       records: this.coreRecords(),
       manifest,
-      // The binding rejects an explicit undefined: omitted means atomic empty-only deletion.
-      ...(this.remote.remoteFolderDeletion && {
-        remoteFolderDeletion: this.remote.remoteFolderDeletion,
-      }),
+      remoteFolderDeletion: this.remote.remoteFolderDeletion,
     });
     for (const action of actions)
       await this.guarded(action.path, () => this.apply(action));
