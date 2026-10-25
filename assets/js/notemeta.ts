@@ -3,6 +3,11 @@
 export const ID_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
 export const ID_LENGTH = 8;
 
+const VALID_ID = new RegExp(`^[${ID_ALPHABET}]{${ID_LENGTH}}$`);
+
+/** Whether `value` is a well-formed note id: 8 lowercase Crockford base32 characters. */
+export const isValidId = (value: string): boolean => VALID_ID.test(value);
+
 export function newId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(ID_LENGTH));
   // 256 is a multiple of 32, so the modulo keeps the distribution uniform.

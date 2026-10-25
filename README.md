@@ -299,6 +299,7 @@ is not activated in your shell):
 (cd assets && npm ci && npm run build)
 (cd assets && npm run dev)     # development only; no production server runtime
 (cd assets && npm run check)   # prettier, tsc, eslint, vitest
+(cd assets && npm run test:coverage) # vitest + V8 coverage; fails below the thresholds in vitest.config.ts
 sh deploy/install-caddy.sh /tmp/marknotes-caddy  # Linux x86-64; verifies upstream SHA-512 checksum
 export PATH="/tmp/marknotes-caddy:$PATH"
 (cd assets && npm run contracts) # production routing/header tests
@@ -343,7 +344,9 @@ changing a master SVG, regenerate them with `cd branding && npm install --no-pac
   "Dependencies (audit)" runs `npm audit --audit-level=high`; the others are "Assets (prettier, tsc, eslint, vitest)", "Browser E2E (Playwright)",
   "Docker image build" and "Parity (marknotes-spec fixtures)" (`npm run parity`: every golden fixture of the
   [marknotes-spec](https://github.com/MaxDac/marknotes-spec) `spec/` submodule run against the browser code; known
-  divergences are asserted to still differ).
+  divergences are asserted to still differ). "Assets" also runs `npm run test:coverage` and writes a coverage table
+  to the job summary. The `coverage.thresholds` in `assets/vitest.config.ts` ratchet: raise them (rounded down to the
+  measured totals) when tests are added, and never lower them to get a change through.
 - `pr-ci.yml` runs them on pull requests, plus "Dependency review" (fails on high-severity vulnerable dependencies) and
   "actionlint" (workflow lint, including shellcheck of `run:` scripts).
 - `codeql.yml` runs CodeQL for `javascript-typescript` and `actions` on pull requests, pushes to `main` and weekly
