@@ -319,6 +319,7 @@ test("Dropbox PKCE popup and direct browser sync", async ({
   let revision = 0,
     cloud = "",
     manifest = "";
+  const revoked: (string | undefined)[] = [];
   const item = (path: string) => ({
     ".tag": "file",
     id: `id:${path}`,
@@ -359,6 +360,10 @@ test("Dropbox PKCE popup and direct browser sync", async ({
       });
     if (path.endsWith("get_current_account"))
       return reply({ email: "test@example.invalid", account_id: "test" });
+    if (path.endsWith("auth/token/revoke")) {
+      revoked.push(req.headers()["authorization"]);
+      return reply(null);
+    }
     if (path.endsWith("create_folder_v2"))
       return reply({
         metadata: {
@@ -438,6 +443,7 @@ test("Dropbox PKCE popup and direct browser sync", async ({
   await expect(page.locator('#tree [data-path="Cloud.md"]')).toHaveText(
     "Cloud",
   );
+  expect(revoked).toEqual(["Bearer browser-only-token"]);
 });
 
 test("OneDrive direct download, guarded writes and newest-wins reconciliation", async ({
