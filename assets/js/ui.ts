@@ -384,8 +384,36 @@ export class NotesUI {
             icon: "folder",
             action: act(() => this.create(true)),
           },
+          {
+            label: "Import document",
+            icon: "file",
+            action: act(() => this.importDocument()),
+          },
         ],
       ),
+    );
+    this.root.addEventListener("dragover", (event) => {
+      if (!this.busy && event.dataTransfer?.types.includes("Files"))
+        event.preventDefault();
+    });
+    this.root.addEventListener(
+      "drop",
+      (event) => {
+        const files = [...(event.dataTransfer?.files ?? [])];
+        if (!files.length) return;
+        // Images dropped on an open note's editor are inserted by the editor instead.
+        const editorImage =
+          this.current &&
+          event.target instanceof Element &&
+          event.target.closest(".cm-editor") &&
+          files.every((file) => ACCEPTED_TYPES.includes(file.type));
+        if (editorImage) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (this.busy) return;
+        void this.run(() => this.importDocument(files));
+      },
+      true,
     );
     this.get(".locations").append(
       button(
@@ -1603,6 +1631,14 @@ export class NotesUI {
   }
   private targetFolder(): string {
     return this.current ? parent(this.selected) : this.selected;
+  }
+  private async importDocument(files?: File[]): Promise<void> {
+    if (!(await this.leaveChords())) return;
+    const { importDialog } = await import("./import-dialog");
+    const path = await importDialog(this.store, this.targetFolder(), files);
+    if (!path) return;
+    await this.refresh();
+    await this.open(path);
   }
   private async create(folder: boolean, chords = false): Promise<void> {
     if (!(await this.leaveChords())) return;

@@ -999,6 +999,22 @@ a {
 .modal.conflicts {
   width: min(760px, calc(100vw - 32px));
 }
+.modal.import-dialog {
+  width: min(760px, calc(100vw - 32px));
+}
+.import-dialog textarea {
+  height: auto;
+  min-height: 100px;
+  padding: 8px 12px;
+  resize: vertical;
+}
+.import-dialog .preview {
+  flex: none;
+  min-height: 100px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
 .conflict + .conflict {
   padding-top: 16px;
   border-top: 1px solid var(--line);
