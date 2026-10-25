@@ -20,10 +20,14 @@ function state(page: Page) {
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open("marknotes");
+      // Never create an empty database while the app is deleting or recreating it.
+      request.onupgradeneeded = () => request.transaction!.abort();
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
-    });
+    }).catch(() => undefined);
+    if (!db) return undefined;
     try {
+      if (!db.objectStoreNames.contains("values")) return undefined;
       return await new Promise<
         { records: unknown[]; snapshot?: unknown } | undefined
       >((resolve, reject) => {
@@ -129,13 +133,16 @@ test("forget device removes diagnostics and export snapshots without reporting",
   const downloaded = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export logs" }).click();
   await downloaded;
+  expect(await state(page)).toHaveProperty("snapshot");
   await page
     .getByRole("button", { name: "Forget this device", exact: true })
     .click();
+  const reloaded = page.waitForEvent("load");
   await page
     .getByRole("dialog")
     .getByRole("button", { name: "Forget this device", exact: true })
     .click();
+  await reloaded;
   await expect(page.locator("#settings")).toBeVisible();
   await expect
     .poll(() => state(page).then((s) => s?.records ?? []))
