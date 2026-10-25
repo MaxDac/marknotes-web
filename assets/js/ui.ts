@@ -71,6 +71,8 @@ import {
 import { ChordEditor } from "./chord-editor";
 import { platformLinks } from "./platforms";
 import { issueDraft, type DiagnosticCode } from "./diagnostics";
+import { FirstAccessGuide } from "./onboarding";
+import { showHelp } from "./help";
 import { type Mode, Session, validatePassphrase } from "./security";
 import {
   ask,
@@ -190,6 +192,8 @@ export class NotesUI {
   private accent = "violet";
   private disposed = false;
   private ready = false;
+  private starting = true;
+  private guide?: FirstAccessGuide;
   private reconnectSync?: ReconnectSync;
   private reconnectEnabled = false;
   private reconnectChannel?: BroadcastChannel;
@@ -250,7 +254,7 @@ export class NotesUI {
     this.root.innerHTML = `
       <p id="connection" class="banner" role="status"></p>
       <p id="reconnect-status" class="banner" role="status" aria-live="polite" hidden></p>
-      <fieldset id="workspace" class="app">
+      <fieldset id="workspace" class="app" disabled>
         <legend class="sr-only">Notes workspace</legend>
         <aside class="sidebar" id="sidebar">
           <div class="brand"><span class="wordmark">MarkNotes</span></div>
@@ -410,7 +414,7 @@ export class NotesUI {
         if (editorImage) return;
         event.preventDefault();
         event.stopPropagation();
-        if (this.busy) return;
+        if (this.busy || this.starting || this.guide?.active) return;
         void this.run(() => this.importDocument(files));
       },
       true,
@@ -465,6 +469,7 @@ export class NotesUI {
         iconOnly: true,
         id: "settings",
       }),
+      button("Help", () => this.help(), { id: "help", variant: "outline" }),
     );
     this.get("#item-actions").append(
       button(
@@ -595,10 +600,33 @@ export class NotesUI {
     window.addEventListener("online", this.networkListener);
     window.addEventListener("offline", this.networkListener);
     this.networkListener();
+    this.guide = new FirstAccessGuide({
+      root: this.root,
+      store: this.store,
+      memoryOnly: this.session.mode === "ephemeral",
+      available: () =>
+        this.ready &&
+        !this.disposed &&
+        !this.busy &&
+        !this.saving &&
+        !this.dirty &&
+        !this.session.locked &&
+        !this.chordEditor?.dirty &&
+        document.visibilityState === "visible" &&
+        !document.querySelector("dialog[open]"),
+      changed: () => this.updateReconnect(),
+      error: (error) => this.error(message(error)),
+    });
+    await this.guide.start();
+    if (this.disposed) return;
     if (navigator.onLine && (await this.store.accounts()).length)
       await this.run(async () => {
         await this.sync();
       });
+    this.starting = false;
+    this.get<HTMLFieldSetElement>("#workspace").disabled = false;
+    this.setEditable(!!this.current);
+    this.updateReconnect();
   }
   private updateReconnect(online?: boolean): void {
     this.reconnectSync?.update({
@@ -607,11 +635,13 @@ export class NotesUI {
       visible: document.visibilityState === "visible",
       available:
         this.ready &&
+        !this.starting &&
         !this.disposed &&
         !this.busy &&
         !this.saving &&
         !this.session.locked &&
         !this.chordEditor?.dirty &&
+        !this.guide?.active &&
         !document.querySelector("dialog[open]"),
     });
   }
@@ -627,6 +657,7 @@ export class NotesUI {
       this.busy ||
       this.saving ||
       this.chordEditor?.dirty ||
+      this.guide?.active ||
       document.querySelector("dialog[open]") ||
       document.visibilityState !== "visible" ||
       !navigator.onLine
@@ -641,6 +672,7 @@ export class NotesUI {
         document.visibilityState !== "visible" ||
         !navigator.onLine ||
         this.chordEditor?.dirty ||
+        this.guide?.active ||
         document.querySelector("dialog[open]")
       ) {
         result = { state: "deferred" };
@@ -835,6 +867,9 @@ export class NotesUI {
     footer.append(button("Done", close, { variant: "solid" }));
     body.querySelector<HTMLElement>("[role=radio][aria-checked=true]")?.focus();
   }
+  private help(): void {
+    showHelp(() => this.guide?.replay(), this.session.mode === "ephemeral");
+  }
   private securitySettings(
     section: (title: string, ...children: Node[]) => HTMLElement,
     close: () => void,
@@ -947,6 +982,7 @@ export class NotesUI {
     });
   }
   private reload(): void {
+    this.guide?.destroy();
     this.reconnectSync?.destroy();
     this.reconnectChannel?.close();
     window.removeEventListener("beforeunload", this.unloadListener);
@@ -1022,6 +1058,7 @@ export class NotesUI {
     return false;
   }
   private async eraseDevice(): Promise<void> {
+    this.guide?.destroy();
     this.reconnectSync?.cancel();
     window.removeEventListener("beforeunload", this.unloadListener);
     await this.session.forget();
@@ -1201,7 +1238,8 @@ export class NotesUI {
     else this.editor.requestMeasure();
   }
   private async toggleView(): Promise<void> {
-    if (!this.current || this.busy) return;
+    if (!this.current || this.busy || this.starting || this.guide?.active)
+      return;
     const chords = this.get("#main").classList.contains("chord-mode");
     if (chords && !(await this.leaveChords())) return;
     this.textView = chords;
@@ -1268,7 +1306,8 @@ export class NotesUI {
     files: File[],
     position: number | null,
   ): Promise<void> {
-    if (!this.current || this.busy) return;
+    if (!this.current || this.busy || this.starting || this.guide?.active)
+      return;
     try {
       const lines: string[] = [];
       for (const file of files) {
@@ -1574,7 +1613,7 @@ export class NotesUI {
     action: () => Promise<void>,
     automatic = false,
   ): Promise<"complete" | "deferred" | "failed"> {
-    if (this.busy) return "deferred";
+    if (this.busy || this.guide?.active) return "deferred";
     this.busy = true;
     this.updateReconnect();
     this.get<HTMLFieldSetElement>("#workspace").disabled = true;
@@ -2140,7 +2179,9 @@ export class NotesUI {
         : "Offline - local editing is available. Drive sign-in and sync need a connection.";
   }
   async prepareUpdate(): Promise<() => void> {
-    if (!this.ready || this.busy)
+    if (this.guide?.active)
+      throw new Error("Finish or skip the guide before updating.");
+    if (!this.ready || this.starting || this.busy)
       throw new Error("Finish the current operation before updating.");
     if (this.session.mode === "ephemeral")
       throw new Error(
@@ -2174,6 +2215,7 @@ export class NotesUI {
   }
   destroy(): void {
     this.disposed = true;
+    this.guide?.destroy();
     this.reconnectSync?.destroy();
     this.reconnectChannel?.close();
     document.removeEventListener("visibilitychange", this.reconnectListener);

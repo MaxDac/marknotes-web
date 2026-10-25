@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./fixtures";
 import { readFile } from "node:fs/promises";
 
 const SECRET = "PRIVATE_NOTE_PATH_ID_TOKEN_STACK";

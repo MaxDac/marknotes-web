@@ -1,4 +1,4 @@
-import { test, expect, type Locator, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "./fixtures";
 import { docxFixture, pdfFixture } from "./import-fixtures";
 
 const GIF = Buffer.from(
@@ -18,6 +18,7 @@ async function drop(
   target: Locator,
   files: { name: string; type: string; text?: string; base64?: string }[],
 ): Promise<void> {
+  await target.click({ trial: true });
   await target.evaluate((element, files) => {
     const dataTransfer = new DataTransfer();
     for (const file of files)

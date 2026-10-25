@@ -28,6 +28,15 @@ other platforms** (opened in a new tab only when clicked).
 
 ## Features
 
+- **First-access guide and Help**: new and existing browser profiles automatically see a skippable guide once after
+  local startup/unlock. Skip, close, Escape or Finish remembers the choice in the current storage mode; an interrupted
+  guide can run again. **Help** replays it and opens **What is Markdown?**, with source/rendered examples and current
+  web coverage and limits. The practice editor is temporary and isolated: it never creates a note, assigns note IDs,
+  imports images, autosaves or syncs. Your real workspace, draft and undo history stay unchanged. In memory-only mode
+  the handled flag lasts only for that session, so the guide can appear again after reload; Forget this device resets
+  it in persistent modes. Help, bundled Driver.js (MIT), its styles and practice examples work offline after normal
+  PWA preparation; no remote tour service, analytics or documentation requests are used.
+
 - **Notes stay in your browser**: stored in IndexedDB as a tree of folders and `.md` notes. You can create, open, rename,
   delete and move notes and folders, and a sidebar shows the folder tree. Note content is never sent to the MarkNotes server.
   There is no persistent server connection. After offline preparation succeeds, you can reopen and edit without a network.
