@@ -165,7 +165,8 @@ function markdown(container: HTMLElement): string {
             .turndown(cell)
             .trim()
             .replace(/\s+/g, " ")
-            .replace(/\|/g, "\\|"),
+            // Escape cell pipes for GFM unless a backslash (not itself escaped) already does.
+            .replace(/(?<!\\)((?:\\\\)*)\|/g, "$1\\|"),
         ),
       );
       if (!rows.length) return "";

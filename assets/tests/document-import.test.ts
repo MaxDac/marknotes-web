@@ -107,6 +107,18 @@ describe("HTML conversion", () => {
     expect(converted.warnings.join(" ")).toContain("Merged");
   });
 
+  it("escapes pipes in table cells exactly once", async () => {
+    const body = importBody(
+      await importHtml(
+        "<table><tr><th>A</th></tr><tr><td>x|y</td></tr><tr><td>end\\|</td></tr></table>",
+      ),
+      true,
+    );
+    expect(body).toContain("| x\\|y |");
+    // Turndown escapes the backslash; the pipe after it still needs its own escape.
+    expect(body).toContain("| end\\\\\\| |");
+  });
+
   it("rejects HTML without content", async () => {
     await expect(importHtml("<script>secret()</script>")).rejects.toThrow(
       "no text",
