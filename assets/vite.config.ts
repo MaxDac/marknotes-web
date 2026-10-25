@@ -37,7 +37,7 @@ export default defineConfig({
         globPatterns: [
           "index.html",
           "security.html",
-          "assets/*.{js,css,wasm}",
+          "assets/*.{js,mjs,css,wasm}",
           "*.{ico,png,svg,webmanifest}",
           "images/*.svg",
         ],

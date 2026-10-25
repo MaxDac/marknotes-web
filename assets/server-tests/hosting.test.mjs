@@ -124,7 +124,7 @@ test("health and runtime public config remain uncached JSON", async () => {
 });
 test("serves every emitted script, stylesheet and Wasm asset with the correct MIME and cache policy", async () => {
   const files = (await readdir("dist", { recursive: true })).filter((file) =>
-    /\.(js|css|wasm)$/.test(file),
+    /\.(js|mjs|css|wasm)$/.test(file),
   );
   assert.ok(
     files.some((file) => file.startsWith("assets/") && file.endsWith(".js")),
@@ -132,6 +132,7 @@ test("serves every emitted script, stylesheet and Wasm asset with the correct MI
   assert.ok(files.some((file) => file.endsWith(".css")));
   const types = {
     js: /(?:text|application)\/javascript/,
+    mjs: /(?:text|application)\/javascript/,
     css: /text\/css/,
     wasm: /application\/wasm/,
   };
@@ -145,7 +146,7 @@ test("serves every emitted script, stylesheet and Wasm asset with the correct MI
     );
     assert.equal(
       response.headers.get("cache-control"),
-      /^assets\/.+-[A-Za-z0-9_-]{8,}\.(js|css|wasm)$/.test(file)
+      /^assets\/.+-[A-Za-z0-9_-]{8,}\.(js|mjs|css|wasm)$/.test(file)
         ? "public, max-age=31536000, immutable"
         : "no-store",
       file,

@@ -41,6 +41,17 @@ other platforms** (opened in a new tab only when clicked).
 - **Images**: insert PNG, JPEG, GIF or WebP images with the toolbar, paste or drag-and-drop. They are downscaled to at
   most 2048 px, stored in the root `attachments/` folder, synced to every drive, and can be cleaned up from **Settings**.
   See [marknotes-spec](https://github.com/MaxDac/marknotes-spec) (`spec/` submodule) for the shared note, link and attachment format.
+- **Import documents**: choose **New → Import document**, drop files anywhere outside an open note's editor, or paste
+  text/HTML in the import dialog (as on Android). Text, Markdown, HTML, DOCX, PDF and images (one document plus any
+  number of images) are converted locally, with a suggested title, destination folder, an **Auto-format** switch (on
+  by default; turns bullets, numbering, headings, links and wrapped lines into Markdown, like Android) and a sanitized
+  preview before saving. HTML/DOCX images and inline `data:` images are stored as hashed attachments; web images become
+  links and are never downloaded, and scripts, styles and embedded content are dropped. PDFs are imported as text only
+  (no images, layout or OCR, as on Android); password-protected PDFs report an error. A taken title gets a ` 2`, ` 3`…
+  suffix; the note, its new id and its images are committed together in device, encrypted and memory-only modes.
+  Limits: 5 MB for text files, 50 MB for documents (100 MB expanded DOCX), 500 PDF pages. Conversion assets, including
+  the PDF worker, are lazy-loaded and precached for offline use. No PWA share target is registered: without a
+  controlling service worker, a share target would send the shared note content to the server.
 - **Chord sequences** (opt-in): turn on **Settings** → **Chord sequences** (off by default, stored only in this
   browser). Then **New** → **New chord sequence** creates a note with `type: chords` in its front-matter. It opens in
   a graphical editor (ported from [ChordBuilder](https://github.com/MaxDac/ChordBuilder)) instead of the markdown editor.

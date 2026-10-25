@@ -6,8 +6,14 @@ import {
   type StoreName,
   type Tx,
 } from "./backend";
-import { inAttachments } from "./attachments";
-import { idsToAssign, newId, newNoteText, withId } from "./notemeta";
+import {
+  attachmentPath,
+  inAttachments,
+  mimeFor,
+  referencedAttachments,
+  type ProcessedImage,
+} from "./attachments";
+import { idsToAssign, newId, newNoteText, noteId, withId } from "./notemeta";
 import { foldCase } from "@marknotes/sync";
 import { Diagnostics } from "./diagnostics";
 
@@ -279,6 +285,57 @@ export class Store {
         revision: crypto.randomUUID(),
       }),
     );
+  }
+  /**
+   * Saves an imported note as `<name>.md` in `folder` (`name 2`, `name 3`… if taken, like Android) together with the
+   * imported images it still references, in one transaction. Returns the new note's path.
+   */
+  async importNote(
+    folder: string,
+    name: string,
+    text: string,
+    images: ProcessedImage[],
+  ): Promise<string> {
+    const base = name.trim();
+    validatePath(join(folder, `${base}.md`));
+    reserved(join(folder, `${base}.md`));
+    const referenced = referencedAttachments([text]);
+    const used = images.filter((image) => referenced.has(image.path));
+    for (const image of used)
+      if (
+        (await attachmentPath(image.bytes, mimeFor(image.path))) !== image.path
+      )
+        throw new Error("An imported image has an invalid attachment hash.");
+    return this.change(["notes", "attachments"], async (tx) => {
+      const notes = await tx.getAll("notes");
+      if (folder && !notes.some((note) => note.path === folder && note.folder))
+        throw new Error("The destination folder no longer exists.");
+      const taken = new Set(notes.map((note) => foldCase(note.path)));
+      let path = join(folder, `${base}.md`);
+      for (let counter = 2; taken.has(foldCase(path)); counter++)
+        path = join(folder, `${base} ${counter}.md`);
+      validatePath(path);
+      const incoming = new Set(used.map((image) => image.path));
+      for (const ref of referenced)
+        if (!incoming.has(ref) && !(await tx.get("attachments", ref)))
+          throw new Error(
+            "An image referenced by this document is missing. Import its image first or remove the reference.",
+          );
+      let id = newId();
+      while (notes.some((note) => noteId(note.text) === id)) id = newId();
+      const modifiedAt = Date.now();
+      for (const image of used)
+        if (!(await tx.get("attachments", image.path)))
+          await tx.add("attachments", { ...image, modifiedAt });
+      await tx.add("notes", {
+        path,
+        text: withId(text, id),
+        folder: false,
+        revision: crypto.randomUUID(),
+        modifiedAt,
+      });
+      return path;
+    });
   }
   async delete(path: string): Promise<void> {
     await this.change(["notes"], async (tx) => {
