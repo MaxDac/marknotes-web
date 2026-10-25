@@ -364,8 +364,7 @@ export class Auth {
         });
         if (!renewed.ok) return;
         const data = (await renewed.json()) as { access_token?: unknown };
-        if (typeof data.access_token !== "string" || !data.access_token)
-          return;
+        if (typeof data.access_token !== "string" || !data.access_token) return;
         access = data.access_token;
       }
       await post("https://api.dropboxapi.com/2/auth/token/revoke", {
