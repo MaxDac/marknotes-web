@@ -510,6 +510,28 @@ a {
 .pane + .pane {
   border-left: 1px solid var(--line);
 }
+/* Edit / Split / Preview: one pane fills the width; Preview also hides the formatting buttons. */
+.main:not(.has-note) .view-switch,
+.chord-mode .view-switch {
+  display: none;
+}
+.view-switch .segment {
+  padding: 0 12px;
+}
+.main[data-view="edit"] .panes,
+.main[data-view="preview"] .panes {
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+}
+.main[data-view="edit"] #preview,
+.main[data-view="preview"] .editor-pane {
+  display: none;
+}
+.main[data-view="preview"] .pane + .pane {
+  border: 0;
+}
+.main[data-view="preview"] .formatting {
+  visibility: hidden;
+}
 #editor {
   height: 100%;
 }
@@ -1117,6 +1139,9 @@ a {
   #sync {
     width: 36px;
     padding: 0;
+  }
+  .toolbar {
+    flex-wrap: wrap;
   }
 
   .panes {
