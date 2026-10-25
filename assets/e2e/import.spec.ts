@@ -67,7 +67,10 @@ test("pasted text is auto-formatted, saved in the chosen folder with a unique na
   await expect(dialog.getByLabel("Folder")).toHaveValue("Work");
   await dialog.getByRole("button", { name: "Import note" }).click();
   await expect(dialog).toBeHidden();
-  await expect(page.locator("#title")).toContainText("Imported.md");
+  await expect(page.locator("#title")).toHaveText("My notesWorkImported");
+  await expect(page.locator('#tree [data-path="Work/Imported.md"]')).toHaveText(
+    "Imported",
+  );
   const editor = page.getByRole("textbox", { name: "Markdown editor" });
   await expect(editor).toContainText("- Private import sentinel");
 
@@ -78,7 +81,10 @@ test("pasted text is auto-formatted, saved in the chosen folder with a unique na
   await dialog.getByLabel("Title").fill("IMPORTED");
   await dialog.getByRole("button", { name: "Import note" }).click();
   await expect(dialog).toBeHidden();
-  await expect(page.locator("#title")).toContainText("IMPORTED 2.md");
+  await expect(page.locator("#title")).toHaveText("My notesWorkIMPORTED 2");
+  await expect(
+    page.locator('#tree [data-path="Work/IMPORTED 2.md"]'),
+  ).toHaveCount(1);
   await expect(editor).toContainText("• second");
 
   await editor.fill("Keep my pending edit");
@@ -135,7 +141,8 @@ for (const [format, images] of [
     await dialog.getByRole("textbox", { name: "Title" }).fill("Example");
     await dialog.getByRole("button", { name: "Import note" }).click();
     await expect(dialog).toBeHidden();
-    await expect(page.locator("#title")).toContainText("Example.md");
+    await expect(page.locator("#title")).toHaveText("My notesExample");
+    await expect(page.locator('#tree [data-path="Example.md"]')).toHaveCount(1);
     await page.reload();
     await expect(
       page.getByRole("textbox", { name: "Markdown editor" }),
@@ -173,11 +180,13 @@ test("a document dropped on the editor opens the import review and keeps the cur
     dialog.getByRole("switch", { name: "Auto-format" }),
   ).toBeDisabled();
   await dialog.getByRole("button", { name: "Import note" }).click();
-  await expect(page.locator("#title")).toContainText("Dropped private note.md");
-  await page
-    .locator("#tree")
-    .getByRole("button", { name: "Current.md", exact: true })
-    .click();
+  await expect(page.locator("#title")).toHaveText(
+    "My notesDropped private note",
+  );
+  await expect(
+    page.locator('#tree [data-path="Dropped private note.md"]'),
+  ).toHaveCount(1);
+  await page.locator('#tree [data-path="Current.md"]').click();
   await expect(editor).toHaveText("Existing work survives a document drop");
 });
 
@@ -194,7 +203,8 @@ test("an image dropped with no note open is imported as a new note", async ({
     "Picture",
   );
   await dialog.getByRole("button", { name: "Import note" }).click();
-  await expect(page.locator("#title")).toContainText("Picture.md");
+  await expect(page.locator("#title")).toHaveText("My notesPicture");
+  await expect(page.locator('#tree [data-path="Picture.md"]')).toHaveCount(1);
   await expect(page.getByRole("article").locator("img")).toHaveCount(1);
 });
 
@@ -240,5 +250,6 @@ test("PDF conversion and its worker work offline", async ({
   await expect(dialog.getByRole("article")).toContainText("PDF private text");
   await dialog.getByRole("textbox", { name: "Title" }).fill("Offline");
   await dialog.getByRole("button", { name: "Import note" }).click();
-  await expect(page.locator("#title")).toContainText("Offline.md");
+  await expect(page.locator("#title")).toHaveText("My notesOffline");
+  await expect(page.locator('#tree [data-path="Offline.md"]')).toHaveCount(1);
 });
