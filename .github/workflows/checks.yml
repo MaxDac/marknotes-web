@@ -81,6 +81,13 @@ jobs:
         working-directory: .
       - run: npm ci
       - run: npm run check
+      - name: Unit test coverage (ratcheting thresholds in vitest.config.ts)
+        run: npm run test:coverage
+      - name: Coverage summary
+        if: always()
+        run: |
+          [ -f coverage/coverage-summary.json ] || exit 0
+          node coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
 
   parity:
     name: Parity (marknotes-spec fixtures)

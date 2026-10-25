@@ -7,6 +7,7 @@ export default ts.config(
       "dist/**",
       "playwright-report/**",
       "test-results/**",
+      "coverage/**",
     ],
   },
   js.configs.recommended,

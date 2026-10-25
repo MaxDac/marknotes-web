@@ -26,6 +26,7 @@ import {
 import {
   filterRefs,
   idsToAssign,
+  isValidId,
   joinFrontMatter,
   linkedId,
   noteId,
@@ -68,9 +69,7 @@ const FIXTURES = join(
 
 /** Fixture file (relative to fixtures/, without .json) → adapter calling the real web code. */
 const mappings: Record<string, Mapping> = {
-  "note-ids/validation": {
-    skip: "the web app has no note id validator; ids are read as any token (see front-matter/read-id knownDivergence.web)",
-  },
+  "note-ids/validation": ({ value }) => ({ valid: isValidId(value) }),
   "front-matter/read-id": ({ text }) => ({ id: noteId(text) ?? null }),
   "front-matter/with-id": ({ text, id }) => ({ text: withId(text, id) }),
   "front-matter/with-body": ({ frontMatter, body }) => ({

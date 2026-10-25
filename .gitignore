@@ -16,6 +16,7 @@ marknotes-*.tar
 /assets/dist/
 /assets/playwright-report/
 /assets/test-results/
+/assets/coverage/
 .env
 .elixir_ls/
 .vscode/
