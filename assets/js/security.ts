@@ -377,20 +377,24 @@ export class Session {
     if (this.working) return this.working;
     if (this.mode === "locked")
       throw new Error("Unlock MarkNotes with your passphrase first.");
-    this.working =
+    const working =
       this.mode === "plain"
         ? new Store(new IdbBackend(this.db))
         : new Store(new MemoryBackend(), await newVaultKey());
-    return this.working;
+    await working.diagnostics.prune();
+    this.working = working;
+    return working;
   }
   async unlock(passphrase: string): Promise<Store> {
     const keys = await unlockKeys(this.security, passphrase);
     const sealer = new Sealer(this.db, keys);
     const backend = new MemoryBackend((changes) => sealer.persist(changes));
     backend.load(await sealer.load());
+    const working = new Store(backend, keys.vault);
+    await working.diagnostics.prune();
     this.keys = keys;
-    this.working = new Store(backend, keys.vault);
-    return this.working;
+    this.working = working;
+    return working;
   }
   /** Confirms the passphrase of an unlocked browser (before removing or changing it). */
   async verify(passphrase: string): Promise<void> {
@@ -410,46 +414,55 @@ export class Session {
       throw new Error("Close other MarkNotes tabs before changing storage.");
     if (target === this.mode) return;
     const source = await this.store();
-    const entries = target === "ephemeral" ? [] : await this.portable(source);
-    let security: Security = { mode: target };
-    let writes: {
-      sealed?: { id: string; value?: Encrypted }[];
-      plain?: Change[];
-    };
-    if (target === "locked") {
-      if (!passphrase) throw new Error("Choose a passphrase.");
-      const lock = await createLock(passphrase, this.iterations);
-      security = lock.security;
-      const reencrypted = await this.withCredentials(entries, lock.keys.vault);
-      writes = {
-        sealed: await new Sealer(this.db, lock.keys).seal(reencrypted),
+    const resumeDiagnostics = await source.diagnostics.suspend();
+    try {
+      const entries = target === "ephemeral" ? [] : await this.portable(source);
+      let security: Security = { mode: target };
+      let writes: {
+        sealed?: { id: string; value?: Encrypted }[];
+        plain?: Change[];
       };
-    } else if (target === "plain") {
-      const key = await newVaultKey();
-      writes = {
-        plain: [
-          ...(await this.withCredentials(entries, key)),
-          { store: "values", key: "vault-key", value: key },
-        ],
-      };
-    } else writes = {};
-    const tx = this.db.transaction(
-      [...STORES, "sealed", "meta"] as const,
-      "readwrite",
-    );
-    await Promise.all([
-      ...STORES.map((s) => tx.objectStore(s).clear()),
-      tx.objectStore("sealed").clear(),
-    ]);
-    for (const { id, value } of writes.sealed ?? [])
-      void tx.objectStore("sealed").put(value!, id);
-    for (const c of writes.plain ?? [])
-      if (c.store === "values")
-        void tx.objectStore("values").put(c.value, c.key);
-      else void tx.objectStore(c.store as "notes").put(c.value as never);
-    void tx.objectStore("meta").put(security, "security");
-    await tx.done;
-    this.security = security;
+      if (target === "locked") {
+        if (!passphrase) throw new Error("Choose a passphrase.");
+        const lock = await createLock(passphrase, this.iterations);
+        security = lock.security;
+        const reencrypted = await this.withCredentials(
+          entries,
+          lock.keys.vault,
+        );
+        writes = {
+          sealed: await new Sealer(this.db, lock.keys).seal(reencrypted),
+        };
+      } else if (target === "plain") {
+        const key = await newVaultKey();
+        writes = {
+          plain: [
+            ...(await this.withCredentials(entries, key)),
+            { store: "values", key: "vault-key", value: key },
+          ],
+        };
+      } else writes = {};
+      const tx = this.db.transaction(
+        [...STORES, "sealed", "meta"] as const,
+        "readwrite",
+      );
+      await Promise.all([
+        ...STORES.map((s) => tx.objectStore(s).clear()),
+        tx.objectStore("sealed").clear(),
+      ]);
+      for (const { id, value } of writes.sealed ?? [])
+        void tx.objectStore("sealed").put(value!, id);
+      for (const c of writes.plain ?? [])
+        if (c.store === "values")
+          void tx.objectStore("values").put(c.value, c.key);
+        else void tx.objectStore(c.store as "notes").put(c.value as never);
+      void tx.objectStore("meta").put(security, "security");
+      await tx.done;
+      this.security = security;
+    } catch (error) {
+      resumeDiagnostics();
+      throw error;
+    }
   }
   /** All records except device-local keys, with credentials decrypted for re-encryption. */
   private async portable(source: Store): Promise<Change[]> {

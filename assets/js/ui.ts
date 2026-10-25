@@ -65,6 +65,7 @@ import {
 } from "./chords";
 import { ChordEditor } from "./chord-editor";
 import { platformLinks } from "./platforms";
+import { issueDraft, type DiagnosticCode } from "./diagnostics";
 import { type Mode, Session, validatePassphrase } from "./security";
 import {
   ask,
@@ -188,9 +189,15 @@ export class NotesUI {
   private matches: NoteRef[] = [];
   private active = 0;
   private dismissed?: number;
+  private lastDiagnostic = new Map<DiagnosticCode, number>();
   private idsReady?: Promise<void>;
   private errorListener = (e: Event) =>
-    this.error(String((e as CustomEvent<unknown>).detail));
+    this.error(String((e as CustomEvent<unknown>).detail), "storage-changed");
+  private crashListener = () => this.recordDiagnostic("uncaught-error");
+  private rejectionListener = () =>
+    this.recordDiagnostic("unhandled-rejection");
+  private pwaErrorListener = () =>
+    this.recordDiagnostic("offline-update-failed");
   private unloadListener = (event: BeforeUnloadEvent) => {
     if (this.dirty || this.chordEditor?.dirty) {
       event.preventDefault();
@@ -217,6 +224,9 @@ export class NotesUI {
       ? await this.unlockScreen()
       : await this.session.store();
     if (this.disposed) return;
+    window.addEventListener("error", this.crashListener);
+    window.addEventListener("unhandledrejection", this.rejectionListener);
+    window.addEventListener("marknotes:pwa-error", this.pwaErrorListener);
     this.auth = new Auth(this.store, this.config);
     this.root.innerHTML = `
       <p id="connection" class="banner" role="status"></p>
@@ -722,6 +732,47 @@ export class NotesUI {
         ),
       ),
       this.securitySettings(section, close),
+      section(
+        "Local diagnostics",
+        element(
+          "p",
+          "Only fixed error codes, categories and times are logged, never notes, paths, identifiers, credentials or raw errors. Kept for up to 7 days and 5 MiB including export snapshots, using this browser's storage mode. Nothing is sent automatically.",
+          "hint",
+        ),
+        button(
+          "Report a problem",
+          () => {
+            close();
+            void this.reportProblem();
+          },
+          { variant: "outline", id: "report-problem" },
+        ),
+        button(
+          "Export logs",
+          () => {
+            void this.exportLogs();
+          },
+          { variant: "outline", id: "export-logs" },
+        ),
+        button(
+          "Clear logs",
+          () => {
+            void this.store.diagnostics.clear().then(
+              () =>
+                this.status(
+                  "Local diagnostic logs and export snapshot cleared",
+                ),
+              () => this.diagnosticFailure(),
+            );
+          },
+          { variant: "outline", id: "clear-logs" },
+        ),
+        element(
+          "p",
+          "Export works offline. Downloaded files are outside MarkNotes storage; clear them yourself. Forget this device also removes local logs and snapshots.",
+          "hint",
+        ),
+      ),
       section(
         "MarkNotes on other platforms",
         element(
@@ -1324,7 +1375,87 @@ export class NotesUI {
   private status(text: string): void {
     this.get("#status").textContent = text;
   }
-  private error(text: string): void {
+  private diagnosticFailure(): void {
+    this.error(
+      "Local diagnostics could not be stored or read. No report was sent and no unencrypted fallback was used.",
+      null,
+    );
+  }
+  recordDiagnostic(code: DiagnosticCode): void {
+    if (!this.store || this.disposed) return;
+    // An error loop must not rewrite the whole log on every event.
+    const now = Date.now();
+    if (now - (this.lastDiagnostic.get(code) ?? -Infinity) < 1000) return;
+    this.lastDiagnostic.set(code, now);
+    void this.store.diagnostics
+      .record(code)
+      .catch(() => this.diagnosticFailure());
+  }
+  private async reportProblem(): Promise<void> {
+    try {
+      const draft = issueDraft(await this.store.diagnostics.recent());
+      const { body, footer, error, close } = openDialog(
+        "Review problem report",
+        () => {},
+      );
+      body.append(
+        element(
+          "p",
+          "Opening this draft sends the logs shown below to GitHub before you submit the issue, and can leave them in browser history. Nothing is sent until you consent and open it. You submit the issue yourself on GitHub.",
+        ),
+        element("pre", draft.body, "diagnostic-excerpt"),
+      );
+      const consent = element("input");
+      consent.type = "checkbox";
+      const label = element("label", undefined, "check");
+      label.append(
+        consent,
+        document.createTextNode(" I consent to send this excerpt to GitHub."),
+      );
+      body.append(label);
+      const open = element("a", "Open GitHub draft", "btn btn-solid");
+      open.target = "_blank";
+      open.rel = "noopener noreferrer";
+      open.setAttribute("role", "button");
+      const update = () => {
+        open.setAttribute("aria-disabled", String(!consent.checked));
+        if (consent.checked) open.href = draft.url;
+        else open.removeAttribute("href");
+      };
+      consent.addEventListener("change", update);
+      update();
+      open.addEventListener("click", (event) => {
+        if (!consent.checked) {
+          event.preventDefault();
+          showError(error, "Consent is required before opening GitHub.");
+        } else close();
+      });
+      footer.append(button("Cancel", close), open);
+    } catch {
+      this.diagnosticFailure();
+    }
+  }
+  private async exportLogs(): Promise<void> {
+    let url: string | undefined;
+    try {
+      const text = await this.store.diagnostics.export();
+      url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+      const link = element("a");
+      link.href = url;
+      link.download = "marknotes-diagnostics.json";
+      link.click();
+      this.status("Sanitized logs exported locally");
+    } catch {
+      this.diagnosticFailure();
+    } finally {
+      if (url) URL.revokeObjectURL(url);
+    }
+  }
+  private error(
+    text: string,
+    code: DiagnosticCode | null = "action-failed",
+  ): void {
+    if (code) this.recordDiagnostic(code);
     const e = this.get("#error");
     e.replaceChildren(
       icon("alert"),
@@ -1347,6 +1478,9 @@ export class NotesUI {
     this.saving = this.savePending(options);
     try {
       await this.saving;
+    } catch (error) {
+      this.recordDiagnostic("save-failed");
+      throw error;
     } finally {
       this.saving = undefined;
       this.updateReconnect();
@@ -1773,6 +1907,8 @@ export class NotesUI {
           r.failures?.length === r.errors.length
             ? r.failures
             : [{ kind: "permanent" }];
+        for (const failure of failures)
+          this.recordDiagnostic(`sync-${failure.kind}`);
         if (failures.some((failure) => failure.kind !== "transient"))
           this.autoStopped.add(id);
         else transient.push(...failures);
@@ -1790,7 +1926,7 @@ export class NotesUI {
       this.status(
         `Sync finished${copies.length ? `: newest versions kept, older ones saved as ${copies.join(", ")} (see Conflicts)` : ""}${errors.length ? ` with ${errors.length} error(s)` : ""}`,
       );
-      if (errors.length) this.error(errors.join("\n"));
+      if (errors.length) this.error(errors.join("\n"), null);
       if (transient.length)
         return {
           state: "retry",
@@ -1928,6 +2064,9 @@ export class NotesUI {
     clearTimeout(this.timer);
     this.media.removeEventListener("change", this.mediaListener);
     window.removeEventListener("marknotes:error", this.errorListener);
+    window.removeEventListener("error", this.crashListener);
+    window.removeEventListener("unhandledrejection", this.rejectionListener);
+    window.removeEventListener("marknotes:pwa-error", this.pwaErrorListener);
     window.removeEventListener("beforeunload", this.unloadListener);
     this.editor?.destroy();
     for (const url of this.urls.values()) URL.revokeObjectURL(url);
