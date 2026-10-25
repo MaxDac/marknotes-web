@@ -927,6 +927,7 @@ export class SyncEngine {
  * Keeps the browser's note tree and every linked drive identical. The order comes from the core's `SyncScheduler`:
  * when a drive brings local changes, the other drives are synced again so they receive them (at most
  * `DEFAULT_MAX_PASSES` times each). Each outcome holds the last pass's errors and the conflicts of every pass.
+ * Every pass that finishes without errors records the drive's last sync time.
  */
 export async function syncAll(
   store: Store,
@@ -956,6 +957,8 @@ export async function syncAll(
         };
         failed = true;
       }
+      if (!failed && !outcome.errors.length)
+        await store.recordSync(id, Date.now());
       outcome.conflicts.unshift(...(outcomes.get(id)?.conflicts ?? []));
       outcomes.set(id, outcome);
       scheduler.report(id, failed ? 0 : outcome.changes, failed);

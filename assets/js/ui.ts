@@ -1681,15 +1681,20 @@ export class NotesUI {
     for (const account of await this.store.accounts()) {
       const row = element("div", undefined, "account"),
         text = element("div", undefined, "account-text"),
-        health = this.health.get(account.id);
+        health = this.health.get(account.id),
+        synced = await this.store.lastSync(account.id),
+        lastSync =
+          synced === undefined
+            ? undefined
+            : `Last sync: ${new Date(synced).toLocaleString()}`;
       const badge = element("span", undefined, `account-icon ${health ?? ""}`);
       badge.append(icon("cloud"));
       badge.title =
         health === "error"
-          ? "Last sync failed"
+          ? `Last sync failed${lastSync ? `. ${lastSync}` : ""}`
           : health === "ok"
-            ? "Synced"
-            : "Not synced yet";
+            ? `Synced${lastSync ? `. ${lastSync}` : ""}`
+            : (lastSync ?? "Not synced yet");
       text.append(
         element("strong", account.label),
         element(
@@ -1697,6 +1702,7 @@ export class NotesUI {
           `${providerNames[account.provider]} · /${account.folder}`,
         ),
       );
+      if (lastSync) text.append(element("small", lastSync, "account-synced"));
       row.append(
         badge,
         text,

@@ -149,6 +149,11 @@ local credentials/history, not local notes or provider-side app authorization. W
 dialog offers **Also delete the notes stored on this device**, which also forgets this device; nothing on the drive is
 deleted.
 
+Each drive in the sidebar shows **Last sync** — when it last finished a sync without errors, including runs with no
+changes — under its folder and in its status icon's tooltip. A failed run keeps the previous time. Like other per-drive
+sync history it follows the storage mode (sealed when locked, current session only when memory-only) and is removed on
+disconnect.
+
 Sync follows initial listings with Dropbox cursors / Microsoft Graph delta feeds, not background polling. Per-drive
 sync records persist locally. The remote `.marknotes/manifest.json` has `format: 1`, `app: "MarkNotes"`,
 device ID, epoch-millisecond timestamps and path-keyed `sha256`/`version`/`syncedAt` entries. Identical content is recognized

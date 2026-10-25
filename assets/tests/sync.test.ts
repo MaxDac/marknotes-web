@@ -767,6 +767,41 @@ describe("sync engine", () => {
   });
 });
 describe("syncAll", () => {
+  it("records each drive's last error-free sync, including no-op runs, until the drive is forgotten", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    try {
+      expect(await store.lastSync("a")).toBeUndefined();
+      await syncAll(store, [{ account, remote }]);
+      expect(await store.lastSync("a")).toBe(10_000);
+      store.close();
+      store = await Store.open(storeName);
+      expect(await store.lastSync("a")).toBe(10_000);
+      now.mockReturnValue(20_000);
+      await syncAll(store, [{ account, remote }]);
+      expect(await store.lastSync("a")).toBe(20_000);
+      await store.forgetAccount("a");
+      expect(await store.lastSync("a")).toBeUndefined();
+    } finally {
+      now.mockRestore();
+    }
+  });
+  it("keeps the previous last sync when a drive fails and still records the others", async () => {
+    await store.recordSync("a", 100);
+    const other = new FakeDrive();
+    remote.fail = true;
+    await syncAll(store, [
+      { account, remote },
+      { account: second, remote: other },
+    ]);
+    expect(await store.lastSync("a")).toBe(100);
+    expect(await store.lastSync("b")).toBeGreaterThan(100);
+    remote.fail = false;
+    remote.failing.add("n.md");
+    await store.write("n.md", "text");
+    const result = await syncAll(store, [{ account, remote }]);
+    expect(result.get("a")?.errors).not.toEqual([]);
+    expect(await store.lastSync("a")).toBe(100);
+  });
   it("marks deletions on every linked drive before another drive restores identical text", async () => {
     const other = new FakeDrive();
     const targets = [
