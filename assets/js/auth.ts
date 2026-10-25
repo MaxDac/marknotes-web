@@ -328,11 +328,51 @@ export class Auth {
     if (response.status === 401) response = await send(true);
     return response;
   }
+  // Dropbox sessions are revoked best effort; Microsoft offers public clients no
+  // single-session revoke, so OneDrive stays a local sign-out.
   async forget(account: Account): Promise<void> {
+    if (account.provider === "dropbox") await this.revokeDropbox(account);
     if (account.provider === "onedrive" && this.msal) {
       const cached = this.msal.getAccount({ homeAccountId: account.subject });
       if (cached) await this.msal.clearCache({ account: cached });
     }
     await this.store.forgetAccount(account.id);
+  }
+  // Never throws or retries, and never saves renewed tokens, so the local
+  // credentials are forgotten promptly whatever the network does.
+  private async revokeDropbox(account: Account): Promise<void> {
+    const post = (url: string, init: RequestInit) =>
+      fetch(url, {
+        ...init,
+        method: "POST",
+        signal: AbortSignal.timeout(10_000),
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+      });
+    try {
+      const saved = await this.vault.load<Tokens>(account.id);
+      if (!saved) return;
+      let access = saved.access;
+      if (saved.expires <= Date.now() + 60_000) {
+        if (!saved.refresh || !this.config.dropbox) return;
+        const renewed = await post("https://api.dropboxapi.com/oauth2/token", {
+          body: new URLSearchParams({
+            grant_type: "refresh_token",
+            refresh_token: saved.refresh,
+            client_id: this.config.dropbox,
+          }),
+        });
+        if (!renewed.ok) return;
+        const data = (await renewed.json()) as { access_token?: unknown };
+        if (typeof data.access_token !== "string" || !data.access_token)
+          return;
+        access = data.access_token;
+      }
+      await post("https://api.dropboxapi.com/2/auth/token/revoke", {
+        headers: { Authorization: `Bearer ${access}` },
+      });
+    } catch {
+      // The local credentials are forgotten regardless.
+    }
   }
 }

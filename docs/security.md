@@ -81,7 +81,9 @@ credentials, except device-local keys.
 sessionStorage and Cache Storage for the origin, and unregisters the PWA service worker. Public-cache writes and
 deletion share a Web Lock; the worker only reads caches on fetch, preventing the old controller from repopulating
 them after deletion. Other tabs receive a cache-disable message. Visit online again to restore offline readiness.
-It does not touch the drives. Disconnecting the **last** drive offers
+It does not touch the drives. Disconnecting a Dropbox drive first calls `auth/token/revoke` (best effort, 10-second
+timeout, never blocking the local disconnect), so its refresh token stops working; OneDrive disconnect only clears
+local credentials, as Microsoft offers public clients no single-session revoke. Disconnecting the **last** drive offers
 the same deletion as a checkbox, **Also delete the notes stored on this device** (unticked by default), mirroring the
 desktop app.
 
