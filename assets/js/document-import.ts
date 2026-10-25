@@ -161,9 +161,10 @@ export async function importHtml(
   plain?: string,
 ): Promise<ImportedDocument> {
   sizeLimit(new TextEncoder().encode(html).length, MAX_DOCUMENT_BYTES, "HTML");
-  const template = document.createElement("template");
-  template.innerHTML = html;
-  const content = template.content;
+  // A parsed document has no browsing context: scripts don't run and images aren't fetched. Every node stays in it,
+  // since adopting an <img> into this page's document would start loading its src.
+  const inert = new DOMParser().parseFromString(html, "text/html");
+  const content = inert.body;
   const result: ImportedDocument = { parts: [], images: [], warnings: [] };
   const removed = content.querySelectorAll(
     "script,style,noscript,template,iframe,frame,object,embed,link,meta,base,form,input,button,select,textarea,svg,math,audio,video,source,picture>source,canvas",
@@ -173,6 +174,9 @@ export async function importHtml(
       "Scripts, styles, forms and embedded media were removed.",
     );
   removed.forEach((node) => node.remove());
+  for (const element of content.querySelectorAll("*"))
+    for (const attribute of [...element.attributes])
+      if (/^on/i.test(attribute.name)) element.removeAttribute(attribute.name);
   for (const img of content.querySelectorAll("img")) {
     const src = img.getAttribute("src")?.trim() ?? "";
     const alt = img.getAttribute("alt")?.trim() ?? "";
@@ -199,7 +203,7 @@ export async function importHtml(
         );
       }
     } else if (WEB_IMAGE.test(src)) {
-      const anchor = document.createElement("a");
+      const anchor = inert.createElement("a");
       anchor.setAttribute("href", src);
       anchor.textContent = alt || "Image";
       img.replaceWith(anchor);
@@ -212,7 +216,7 @@ export async function importHtml(
         "Linked images that aren't on the web were left out.",
       );
     }
-    img.replaceWith(document.createTextNode(alt));
+    img.replaceWith(inert.createTextNode(alt));
   }
   for (const anchor of content.querySelectorAll("a")) {
     const href = anchor.getAttribute("href")?.trim() ?? "";
@@ -224,12 +228,10 @@ export async function importHtml(
     result.warnings.push(
       "Merged table cells were flattened; check the table in the preview.",
     );
-  const container = document.createElement("div");
-  container.append(content);
   const part: ImportPart = {
     kind: "html",
-    markdown: markdown(container),
-    plain: plain?.trim() ? plain : plainText(container),
+    markdown: markdown(content),
+    plain: plain?.trim() ? plain : plainText(content),
   };
   if (!part.markdown.trim() && !part.plain.trim())
     throw new Error("This document contains no text or images to import.");

@@ -145,6 +145,7 @@ for (const [format, images] of [
     expect(sent).not.toContain("private text");
     expect(sent).not.toContain("example.invalid");
     expect(sent).not.toContain("/leak");
+    expect(sent).not.toContain("/attachments/");
   });
 
 test("a document dropped on the editor opens the import review and keeps the current note", async ({
