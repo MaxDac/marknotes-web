@@ -34,7 +34,7 @@ On WSL, make sure the Mise/asdf shims precede Windows executables (`mise exec --
 | Dependencies (audit) | `cd assets && npm audit --audit-level=high` |
 | Dialyzer (legacy required label) | `caddy validate --config Caddyfile --adapter caddyfile && shellcheck deploy/*.sh` |
 | Parity (marknotes-spec fixtures) | `git submodule update --init spec && cd assets && npm run parity` |
-| Assets (prettier, tsc, eslint, vitest) | `cd assets && npm ci && npm run check` |
+| Assets (prettier, tsc, eslint, vitest) | `cd assets && npm ci && npm run check && npm run test:coverage` |
 | Browser E2E (Playwright) | `cd assets && npx playwright install --with-deps chromium && npm run e2e` (starts its own server on :4000) |
 | Docker image build | `docker build -t marknotes:test . && sh deploy/test-container.sh marknotes:test` |
 
@@ -102,6 +102,8 @@ only points there). `assets/parity/fixtures.test.ts` runs every `spec/fixtures` 
 - Keep the CSP in `Caddyfile` tight; adding an origin needs a reason in the PR (and, for OneDrive download
   hosts, the matching list in `providers.ts`). Update `docs/security.md` and `/security` when protections change.
 - Sync changes need vitest coverage against the fake drive; UI flows touching providers need Playwright fixtures.
+- `coverage.thresholds` in `assets/vitest.config.ts` only ratchet upwards: after adding tests, raise them to the new
+  `npm run test:coverage` totals rounded down; never lower them.
 - Proton Drive is out of scope until [#1](https://github.com/MaxDac/marknotes-web/issues/1) is resolved; do not add a
   Proton login or proxy. If you work on it, follow the README "Proton follow-up requirements".
 - Preserve IndexedDB schema/identity and HTTPS origin during infrastructure migrations. Installed workers must not

@@ -10,7 +10,7 @@ export default defineConfig({
       reporter: ["text", "json-summary", "html"],
       reportsDirectory: "coverage",
       // Ratchet: raise these when coverage improves; never lower them to make a change pass.
-      thresholds: { statements: 56, branches: 55, functions: 58, lines: 57 },
+      thresholds: { statements: 87, branches: 77, functions: 87, lines: 89 },
     },
   },
 });
