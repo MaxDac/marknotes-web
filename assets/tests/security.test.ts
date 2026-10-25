@@ -125,6 +125,7 @@ describe("storage modes", () => {
     });
     await new Vault(store).save("d1", { access: "TOKEN_SENTINEL" });
     await store.putBase("d1", "Secret folder/Diary.md", "BASE_SENTINEL");
+    await store.recordSync("d1", 1234);
     await s.switchTo("locked", PASS);
     done(s);
 
@@ -165,6 +166,7 @@ describe("storage modes", () => {
     expect(await store.base("d1", "Secret folder/Diary.md")).toBe(
       "BASE_SENTINEL",
     );
+    expect(await store.lastSync("d1")).toBe(1234);
     await store.write("Later.md", "LATER_SENTINEL");
     await store.delete("Secret folder");
     await s.changePassphrase(PASS, "another long passphrase");
@@ -220,6 +222,7 @@ describe("storage modes", () => {
     expect(await store.list()).toEqual([]);
     await store.write("tmp.md", "TEMP");
     await new Vault(store).save("x", { access: "t" });
+    await store.recordSync("x", 5678);
     expect(await new Vault(store).load("x")).toEqual({ access: "t" });
     const disk = await raw(name);
     expect(disk.notes).toEqual([]);
@@ -232,6 +235,7 @@ describe("storage modes", () => {
     const kept = await plain.store();
     expect((await kept.note("tmp.md"))?.text).toBe("TEMP");
     expect(await new Vault(kept).load("x")).toEqual({ access: "t" });
+    expect(await kept.lastSync("x")).toBe(5678);
   });
   it("refuses to change storage while another tab is open", async () => {
     const name = crypto.randomUUID();
