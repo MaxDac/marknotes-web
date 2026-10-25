@@ -2,8 +2,10 @@ import { type EditorView } from "@codemirror/view";
 import { Auth, type PublicConfig } from "./auth";
 import {
   createEditor,
+  cycleHeading,
   format,
   insert,
+  numberedList,
   type Mention,
   preview,
   setEditorEditable,
@@ -105,16 +107,22 @@ const providerNames: Record<Account["provider"], string> = {
   onedrive: "OneDrive",
 };
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-const formatting: [string, IconName | string, string, string][] = [
-  ["Bold", "B", "**", "**"],
-  ["Italic", "I", "*", "*"],
-  ["Heading", "H", "## ", ""],
-  ["Link", "link", "[", "](https://)"],
-  ["Code", "code", "`", "`"],
-  ["Code block", "block", "```\n", "\n```"],
-  ["List", "list", "- ", ""],
-  ["Checklist", "checklist", "- [ ] ", ""],
-  ["Quote", "quote", "> ", ""],
+const wrap =
+  (before: string, after = before) =>
+  (view: EditorView) =>
+    format(view, before, after);
+const formatting: [string, IconName | string, (view: EditorView) => void][] = [
+  ["Bold", "B", wrap("**")],
+  ["Italic", "I", wrap("*")],
+  ["Strikethrough", "S", wrap("~~")],
+  ["Heading", "H", cycleHeading],
+  ["Link", "link", wrap("[", "](https://)")],
+  ["Code", "code", wrap("`")],
+  ["Code block", "block", wrap("```\n", "\n```")],
+  ["List", "list", wrap("- ", "")],
+  ["Numbered list", "numbered", numberedList],
+  ["Checklist", "checklist", wrap("- [ ] ", "")],
+  ["Quote", "quote", wrap("> ", "")],
 ];
 type ViewMode = "edit" | "split" | "preview";
 const VIEW_CHOICES: { value: ViewMode; label: string }[] = [
@@ -442,7 +450,7 @@ export class NotesUI {
         { icon: "trash", id: "delete" },
       ),
     );
-    for (const [label, glyph, before, after] of formatting) {
+    for (const [label, glyph, action] of formatting) {
       const b =
         glyph.length === 1
           ? button(label, undefined, { iconOnly: true, className: "glyph" })
@@ -453,7 +461,7 @@ export class NotesUI {
       if (glyph.length === 1)
         b.append(element("span", glyph, `glyph-${glyph}`));
       b.addEventListener("click", () => {
-        if (this.current && !this.busy) format(this.editor, before, after);
+        if (this.current && !this.busy) action(this.editor);
       });
       this.get("#formatting").append(b);
     }

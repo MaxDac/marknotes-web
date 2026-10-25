@@ -188,6 +188,9 @@ a {
   font-family: Georgia, serif;
   font-style: italic;
 }
+.glyph-S {
+  text-decoration: line-through;
+}
 
 /* Layout */
 .banner:empty {
