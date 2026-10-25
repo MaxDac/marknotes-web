@@ -783,7 +783,7 @@ test("settings link to the other MarkNotes apps in a new tab", async ({
       "https://f-droid.org/packages/io.github.maxdac.marknotes.libre/",
     ],
     [
-      "MarkNotes Pro for Android (GitHub Releases)",
+      "MarkNotes Plus for Android (GitHub Releases)",
       "https://github.com/MaxDac/MarkNotes/releases",
     ],
     [

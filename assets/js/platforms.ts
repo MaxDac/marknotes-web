@@ -12,7 +12,7 @@ export const OTHER_PLATFORMS: readonly Platform[] = [
     url: "https://f-droid.org/packages/io.github.maxdac.marknotes.libre/",
   },
   {
-    label: "MarkNotes Pro for Android (GitHub Releases)",
+    label: "MarkNotes Plus for Android (GitHub Releases)",
     url: "https://github.com/MaxDac/MarkNotes/releases",
   },
   {
