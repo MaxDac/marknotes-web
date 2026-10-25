@@ -214,6 +214,18 @@ the in-app `/security` page. Clearing site data or browser profiles removes note
 server-side recovery. Private browsing may limit storage. WebCrypto, IndexedDB and Web Locks support are required
 (secure HTTPS, or localhost). Concurrent stale edits fail visibly instead of silently overwriting a newer note.
 
+Settings > **Local diagnostics** keeps only allowlisted error codes, categories and timestamps, never note content,
+paths, identifiers, credentials, raw messages or stack traces. Logs and the latest export snapshot are capped at
+seven days and 5 MiB together, pruned on startup, write, review and export. They use the selected storage mode:
+encrypted with the working set in passphrase mode, memory only in memory mode. No plaintext fallback is used if
+logging fails, and nothing is recorded before storage is available or while locked.
+**Clear logs** and **Forget this device** remove local diagnostics and snapshots.
+**Export logs** downloads sanitized JSON offline; downloaded files are outside app storage and must be deleted yourself.
+**Report a problem** shows the exact bounded excerpt for review and requires consent before opening a GitHub issue
+draft for this repository. The full encoded URL is at most 2,000 ASCII characters, includes only whole records and
+marks omissions. Opening it already transmits that excerpt to GitHub, before submission, and can leave it in browser
+history. Nothing is sent automatically; you submit the issue yourself.
+
 ## Development
 
 Coding agents (and humans) should start with [AGENTS.md](AGENTS.md): CI-mirroring commands, architecture and the

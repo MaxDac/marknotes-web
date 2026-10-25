@@ -85,6 +85,26 @@ It does not touch the drives. Disconnecting the **last** drive offers
 the same deletion as a checkbox, **Also delete the notes stored on this device** (unticked by default), mirroring the
 desktop app.
 
+### Local diagnostics
+
+`diagnostics.ts` accepts only fixed error codes and derives allowlisted categories. It never accepts raw exceptions,
+messages, stacks, note content, paths, account or device identifiers, or credentials. Stored records are reconstructed
+from the allowlist again before review or export. Handled UI/save/sync errors and uncaught browser errors/rejections
+are recorded only once working storage is available; errors before unlock are not persisted elsewhere. Repeats of the
+same code within one second are collapsed so an error loop cannot rewrite the log continuously.
+
+Logs and the latest export snapshot share a seven-day / 5 MiB cap (with room reserved for encryption overhead).
+Startup, write, review and export prune them; no deletion can run while the app is closed or locked. They are a
+`values` record, so passphrase sealing, mode migration, memory-only storage, rekeying and Forget this device apply
+unchanged. There is no alternate plaintext fallback. Clear logs deletes both records and export snapshots.
+
+Export is offline sanitized JSON; downloaded files are outside app control and must be removed by the user.
+Reporting first shows the exact sanitized excerpt and a consent checkbox. Only the consented explicit link opens a
+new GitHub draft for `MaxDac/marknotes-web`. Its entire encoded URL is capped at 2,000 ASCII characters, with whole
+records and a truncation marker. The review warns that opening the URL transmits logs to GitHub before submission
+and may retain them in browser history. No automatic reporting, telemetry endpoint, CSP expansion or private
+service-worker caching is introduced.
+
 ### Network and page hardening
 
 - CSP `connect-src` (`Caddyfile`) is limited to:

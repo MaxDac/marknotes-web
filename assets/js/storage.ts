@@ -9,6 +9,7 @@ import {
 import { inAttachments } from "./attachments";
 import { idsToAssign, newId, newNoteText, withId } from "./notemeta";
 import { foldCase } from "@marknotes/sync";
+import { Diagnostics } from "./diagnostics";
 
 export interface Note {
   path: string;
@@ -78,6 +79,7 @@ function reserved(path: string): void {
 }
 
 export class Store {
+  readonly diagnostics: Diagnostics;
   /**
    * @param vaultKey encrypts provider credentials when the tree is memory-backed (locked or memory-only browsers);
    * otherwise a non-extractable key is generated and kept in IndexedDB.
@@ -85,11 +87,14 @@ export class Store {
   constructor(
     readonly backend: Backend,
     readonly vaultKey?: CryptoKey,
-  ) {}
+  ) {
+    this.diagnostics = new Diagnostics(backend);
+  }
   static async open(name = "marknotes"): Promise<Store> {
     return new Store(new IdbBackend(await openDatabase(name)));
   }
   close(): void {
+    this.diagnostics.close();
     this.backend.close();
   }
   private read<T>(
