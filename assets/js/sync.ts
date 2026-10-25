@@ -22,6 +22,7 @@ import {
   isSyncedEntry,
   localDeletions,
   plan,
+  recreatedFolders,
   reconcile,
   sha256Hex,
 } from "@marknotes/sync";
@@ -65,6 +66,11 @@ export interface Remote {
   ensureFolder(path: string): Promise<Entry>;
   /** Folder deletion must be atomic and non-recursive, or fail without making a request. */
   delete(entry: Entry): Promise<void>;
+  /**
+   * Whether `delete` removes empty folders atomically. Folders deleted here are kept on `"unsupported"` drives and the
+   * user is told once to remove them by hand. Omitted means atomic empty-only deletion.
+   */
+  readonly remoteFolderDeletion?: "atomicEmptyOnly" | "unsupported";
   /** Identity-preserving, no-clobber case rename; never marks returned content as synced. */
   rename(entry: Entry, toPath: string): Promise<Entry>;
   readManifest(): Promise<string | null>;
@@ -217,7 +223,17 @@ export class SyncEngine {
           sha256: hash === FOLDER ? undefined : hash,
           modifiedMillis: this.modified.get(path),
         });
-    await this.markLocalDeletions(local);
+    await this.reviewLocalHistory(local);
+    const folders = new Map(
+      [...this.entries.values()]
+        .filter((e) => e.folder)
+        .map((e) => [e.path, e.id]),
+    );
+    const retired = await this.store.retireReplacedFolders(
+      this.account.id,
+      folders,
+    );
+    if (retired) this.records = new Map(retired.map((r) => [r.path, r]));
     let manifest: string | null = null;
     try {
       manifest = await this.remote.readManifest();
@@ -226,11 +242,14 @@ export class SyncEngine {
     }
     const { actions } = plan({
       local,
-      remote: [...this.entries.values()]
-        .filter((e) => isSyncedEntry(e.path, e.folder))
-        .map(toCore),
+      // Unsynced drive entries are listed too: they keep a deleted folder from being removed.
+      remote: [...this.entries.values()].map(toCore),
       records: this.coreRecords(),
       manifest,
+      // The binding rejects an explicit undefined: omitted means atomic empty-only deletion.
+      ...(this.remote.remoteFolderDeletion && {
+        remoteFolderDeletion: this.remote.remoteFolderDeletion,
+      }),
     });
     for (const action of actions)
       await this.guarded(action.path, () => this.apply(action));
@@ -258,29 +277,28 @@ export class SyncEngine {
       localHash: r.hash,
       syncedAt: r.syncedAt,
       localDeleted: r.localDeleted ?? false,
+      remoteFolderPreserved: r.remoteFolderPreserved ?? false,
     }));
   }
-  private async markLocalDeletions(local: LocalEntry[]): Promise<void> {
+  /**
+   * Before planning, and for every drive at once: flags what was deleted in this browser, and retires the records of
+   * preserved folders recreated here (keeping their drive identity), so no drive deletes the recreated folder.
+   */
+  private async reviewLocalHistory(local: LocalEntry[]): Promise<void> {
     const accounts = new Set([
       ...(await this.store.accounts()).map((a) => a.id),
       ...this.linkedAccounts.map((a) => a.id),
       this.account.id,
     ]);
-    for (const id of accounts) {
-      const key = `${id}:records`;
-      const records =
-        id === this.account.id
-          ? [...this.records.values()]
-          : ((await this.store.value<RecordState[]>(key)) ?? []);
-      const deleted = new Set(localDeletions(local, this.coreRecords(records)));
-      if (!deleted.size) continue;
-      const next = records.map((r) =>
-        deleted.has(r.path) ? { ...r, localDeleted: true } : r,
-      );
-      await this.store.put(key, next);
-      if (id === this.account.id)
-        this.records = new Map(next.map((r) => [r.path, r]));
-    }
+    const changed = await this.store.flagLocalHistory([...accounts], (r) => {
+      const records = this.coreRecords(r);
+      return {
+        deleted: localDeletions(local, records),
+        recreated: recreatedFolders(local, records),
+      };
+    });
+    const mine = changed.get(this.account.id);
+    if (mine) this.records = new Map(mine.map((r) => [r.path, r]));
   }
   private async listLocal(): Promise<LocalEntry[]> {
     const entries: LocalEntry[] = [];
@@ -414,6 +432,20 @@ export class SyncEngine {
       case "deleteRemoteFolder":
         await this.remote.delete(this.entry(action.remote));
         return this.forgetTree(action.path, action.forget);
+      case "preserveRemoteFolder":
+        // Recreated here since planning: the folder is kept and synced as it is.
+        if (!(await this.unchanged(action.path))) return;
+        this.records = new Map(
+          (
+            await this.store.preserveRemoteFolder(
+              this.account.id,
+              action.path,
+              action.remote.id,
+              action.path === ATTACHMENTS ? ATTACHMENTS_FOLDER : undefined,
+            )
+          ).map((r) => [r.path, r]),
+        );
+        return;
       case "renameLocal":
       case "renameRemote": {
         const metadataOnly =
@@ -898,7 +930,13 @@ export class SyncEngine {
     await this.persist();
   }
   private async recordFolder(path: string, remoteId: string): Promise<void> {
-    this.records.set(path, {
+    const old = this.records.get(path);
+    const records = new Map(this.records);
+    // A different folder replaced the recorded one: nothing recorded inside the old one may act on the new one.
+    const replaced = !!old?.folder && old.remoteId !== remoteId;
+    if (replaced)
+      for (const p of records.keys()) if (inside(path, p)) records.delete(p);
+    records.set(path, {
       path,
       folder: true,
       remoteId,
@@ -906,7 +944,7 @@ export class SyncEngine {
       hash: "",
       syncedAt: Date.now(),
     });
-    await this.persist();
+    await this.persist(records, replaced ? [path] : []);
   }
   private async forget(path: string): Promise<void> {
     this.records.delete(path);
@@ -918,8 +956,16 @@ export class SyncEngine {
     await this.persist();
     await this.store.deleteBase(this.account.id, folder);
   }
-  private async persist(): Promise<void> {
-    await this.store.put(this.key, [...this.records.values()]);
+  private async persist(
+    records = this.records,
+    replaced: string[] = [],
+  ): Promise<void> {
+    const saved = await this.store.commitSyncRecords(
+      this.account.id,
+      [...records.values()],
+      replaced,
+    );
+    this.records = new Map(saved.map((r) => [r.path, r]));
   }
 }
 

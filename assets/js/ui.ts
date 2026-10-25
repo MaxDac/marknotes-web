@@ -1782,6 +1782,31 @@ export class NotesUI {
         ),
       );
       accounts.append(row);
+      for (const notice of await this.store.folderNotices(account.id)) {
+        if (!notice.active || notice.acknowledged) continue;
+        const box = element("div", undefined, "account-notice");
+        box.setAttribute("role", "status");
+        box.append(
+          element(
+            "p",
+            `“/${[account.folder, notice.path].filter(Boolean).join("/")}” was deleted in this browser but is kept on ${providerNames[account.provider]}, which can't delete folders safely. Delete it there yourself.`,
+            "hint",
+          ),
+          button(
+            "Got it",
+            () =>
+              void this.run(async () => {
+                await this.store.acknowledgeFolderNotice(
+                  account.id,
+                  notice.generation,
+                );
+                await this.renderAccounts();
+              }),
+            { variant: "outline" },
+          ),
+        );
+        accounts.append(box);
+      }
     }
   }
   private async reconnect(account: Account): Promise<void> {

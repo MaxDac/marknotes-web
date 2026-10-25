@@ -34,6 +34,79 @@ export interface RecordState {
   hash: string;
   syncedAt: number;
   localDeleted?: boolean;
+  /** The folder was deleted here but kept on a drive that cannot delete empty folders safely. */
+  remoteFolderPreserved?: boolean;
+}
+/**
+ * Tells the user once to remove a folder deleted in this browser from a drive by hand. Each deletion gets a new
+ * `generation`; the notice stops being `active` when the folder is revived, recreated, replaced or gone.
+ */
+export interface FolderNotice {
+  path: string;
+  remoteId: string;
+  generation: string;
+  acknowledged: boolean;
+  active: boolean;
+}
+/** The drive identity of a preserved folder whose record was retired because the folder was recreated here. */
+interface FolderWitness {
+  path: string;
+  remoteId: string;
+}
+const noticesKey = (account: string) => `${account}:folder-notices`;
+const witnessesKey = (account: string) => `${account}:recreated-folders`;
+
+/** Drops the sync history strictly inside `folder`: its records are returned without them. */
+async function retireDescendants(
+  tx: Tx,
+  account: string,
+  records: RecordState[],
+  folder: string,
+): Promise<RecordState[]> {
+  const prefix = `${account}:base:`;
+  for (const key of await tx.keys("values"))
+    if (key.startsWith(prefix) && inside(folder, key.slice(prefix.length)))
+      await tx.delete("values", key);
+  return records.filter((r) => !inside(folder, r.path));
+}
+
+/**
+ * Saves a drive's records with its folder notices and witnesses. A notice stays active only while its folder record
+ * is still preserved with the same identity, and a witness only until the path has a record again.
+ */
+async function saveHistory(
+  tx: Tx,
+  account: string,
+  records: RecordState[],
+  notices?: FolderNotice[],
+  witnesses?: FolderWitness[],
+): Promise<void> {
+  const storedNotices = (await tx.get("values", noticesKey(account))) as
+    FolderNotice[] | undefined;
+  const storedWitnesses = (await tx.get("values", witnessesKey(account))) as
+    FolderWitness[] | undefined;
+  const byPath = new Map(records.map((r) => [r.path, r]));
+  const nextNotices = (notices ?? storedNotices ?? []).map((n) => {
+    const r = byPath.get(n.path);
+    return !n.active ||
+      (r?.folder && r.remoteFolderPreserved && r.remoteId === n.remoteId)
+      ? n
+      : { ...n, active: false };
+  });
+  const nextWitnesses = (witnesses ?? storedWitnesses ?? []).filter(
+    (w) => !byPath.has(w.path),
+  );
+  await tx.put("values", records, `${account}:records`);
+  if (
+    notices ||
+    JSON.stringify(nextNotices) !== JSON.stringify(storedNotices ?? [])
+  )
+    await tx.put("values", nextNotices, noticesKey(account));
+  if (
+    witnesses ||
+    JSON.stringify(nextWitnesses) !== JSON.stringify(storedWitnesses ?? [])
+  )
+    await tx.put("values", nextWitnesses, witnessesKey(account));
 }
 /** An immutable binary file under `attachments/`, named by the SHA-256 of its bytes. */
 export interface Attachment {
@@ -402,7 +475,25 @@ export class Store {
         await tx.delete("values", key);
         await tx.add("values", value, target);
       }
-      await tx.put("values", records, `${account}:records`);
+      const move = <T extends { path: string }>(items: T[]): T[] =>
+        items.map((item) =>
+          item.path === from || inside(from, item.path)
+            ? { ...item, path: to + item.path.slice(from.length) }
+            : item,
+        );
+      await saveHistory(
+        tx,
+        account,
+        records,
+        move(
+          ((await tx.get("values", noticesKey(account))) ??
+            []) as FolderNotice[],
+        ),
+        move(
+          ((await tx.get("values", witnessesKey(account))) ??
+            []) as FolderWitness[],
+        ),
+      );
     });
   }
   /**
@@ -463,6 +554,155 @@ export class Store {
     await this.change(["values"], async (tx) => {
       for (const k of await tx.keys("values"))
         if (k === key || k.startsWith(`${key}/`)) await tx.delete("values", k);
+    });
+  }
+  /**
+   * Saves a drive's sync records. `replaced` lists folders whose drive identity changed: the history inside them
+   * (records and base copies) is dropped in the same transaction, so it can never authorize a deletion later.
+   */
+  async commitSyncRecords(
+    account: string,
+    records: RecordState[],
+    replaced: string[] = [],
+  ): Promise<RecordState[]> {
+    return this.change(["values"], async (tx) => {
+      for (const folder of replaced)
+        records = await retireDescendants(tx, account, records, folder);
+      await saveHistory(tx, account, records);
+      return records;
+    });
+  }
+  /**
+   * Flags notes deleted in this browser and retires the records of preserved folders recreated here, for every drive
+   * in one transaction, so that no drive plans with half of it. `review` returns, for a drive's records, the paths
+   * deleted locally and the preserved folders recreated locally. Returns the records of the drives that changed.
+   */
+  async flagLocalHistory(
+    accounts: string[],
+    review: (records: RecordState[]) => {
+      deleted: string[];
+      recreated: string[];
+    },
+  ): Promise<Map<string, RecordState[]>> {
+    return this.change(["values"], async (tx) => {
+      const changed = new Map<string, RecordState[]>();
+      for (const account of accounts) {
+        const records = ((await tx.get("values", `${account}:records`)) ??
+          []) as RecordState[];
+        const { deleted, recreated } = review(records);
+        if (!deleted.length && !recreated.length) continue;
+        const gone = records.filter((r) => recreated.includes(r.path));
+        const next = records
+          .filter((r) => !recreated.includes(r.path))
+          .map((r) =>
+            deleted.includes(r.path) ? { ...r, localDeleted: true } : r,
+          );
+        const witnesses = (
+          ((await tx.get("values", witnessesKey(account))) ??
+            []) as FolderWitness[]
+        ).filter((w) => !recreated.includes(w.path));
+        await saveHistory(tx, account, next, undefined, [
+          ...witnesses,
+          ...gone.map((r) => ({ path: r.path, remoteId: r.remoteId })),
+        ]);
+        changed.set(account, next);
+      }
+      return changed;
+    });
+  }
+  /**
+   * Drops the history inside folders recreated here whose drive copy was since replaced by another folder
+   * (`folders` maps the drive's folder paths to their ids). Returns the new records if any changed.
+   */
+  async retireReplacedFolders(
+    account: string,
+    folders: Map<string, string>,
+  ): Promise<RecordState[] | undefined> {
+    return this.change(["values"], async (tx) => {
+      const replaced = (
+        ((await tx.get("values", witnessesKey(account))) ??
+          []) as FolderWitness[]
+      ).filter(
+        (w) => folders.has(w.path) && folders.get(w.path) !== w.remoteId,
+      );
+      if (!replaced.length) return undefined;
+      let records = ((await tx.get("values", `${account}:records`)) ??
+        []) as RecordState[];
+      for (const w of replaced)
+        records = await retireDescendants(tx, account, records, w.path);
+      await saveHistory(tx, account, records);
+      return records;
+    });
+  }
+  /**
+   * Keeps a folder deleted here on a drive that cannot delete it safely, and records a new notice telling the user to
+   * remove it by hand. Fails if the folder exists here again or its record changed. `marker` is the value that marks
+   * the local attachments folder.
+   */
+  async preserveRemoteFolder(
+    account: string,
+    path: string,
+    remoteId: string,
+    marker?: string,
+  ): Promise<RecordState[]> {
+    return this.change(["notes", "attachments", "values"], async (tx) => {
+      const folded = foldCase(path);
+      const here = (key: string) =>
+        foldCase(key) === folded || inside(folded, foldCase(key));
+      if (
+        marker
+          ? (await tx.get("values", marker)) ||
+            (await tx.keys("attachments")).some(here)
+          : (await tx.keys("notes")).some(here)
+      )
+        throw new Error(
+          "The folder was recreated in this browser; it was kept on the drive.",
+        );
+      const records = ((await tx.get("values", `${account}:records`)) ??
+        []) as RecordState[];
+      const record = records.find((r) => r.path === path);
+      if (!record?.folder || record.remoteId !== remoteId)
+        throw new Error("The folder's sync history changed; sync again.");
+      if (record.remoteFolderPreserved) return records;
+      const next = records.map((r) =>
+        r === record ? { ...r, remoteFolderPreserved: true } : r,
+      );
+      const notices = ((await tx.get("values", noticesKey(account))) ??
+        []) as FolderNotice[];
+      await saveHistory(tx, account, next, [
+        ...notices,
+        {
+          path,
+          remoteId,
+          generation: crypto.randomUUID(),
+          acknowledged: false,
+          active: true,
+        },
+      ]);
+      return next;
+    });
+  }
+  /** Every manual-removal notice of a drive, including retired and acknowledged ones. */
+  async folderNotices(account: string): Promise<FolderNotice[]> {
+    return (await this.value<FolderNotice[]>(noticesKey(account))) ?? [];
+  }
+  /** Records that the user saw a manual-removal notice, so it is not shown again. */
+  async acknowledgeFolderNotice(
+    account: string,
+    generation: string,
+  ): Promise<void> {
+    await this.change(["values"], async (tx) => {
+      const notices = ((await tx.get("values", noticesKey(account))) ??
+        []) as FolderNotice[];
+      if (!notices.some((n) => n.generation === generation))
+        throw new Error("The folder notice no longer exists.");
+      await tx.put(
+        "values",
+        notices.map((n) =>
+          n.generation === generation ? { ...n, acknowledged: true } : n,
+        ),
+        noticesKey(account),
+      );
     });
   }
   async accounts(): Promise<Account[]> {
