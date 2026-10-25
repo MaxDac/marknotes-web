@@ -46,6 +46,15 @@ describe("deferred remote folder removal", () => {
         .remoteFolderDeletion,
     ).toBe("unsupported");
   });
+  it("deletes atomically when a drive leaves the capability undefined", async () => {
+    const store = await Store.open(crypto.randomUUID());
+    closing.push(store);
+    const remote = new FakeDrive();
+    expect(remote).toHaveProperty("remoteFolderDeletion", undefined);
+    await preserve(store, remote);
+    expect(remote.data.has("Old notes")).toBe(false);
+    expect(await store.folderNotices(account.id)).toEqual([]);
+  });
   it("keeps the folder on the drive with one pending notice that survives reopening once acknowledged", async () => {
     const name = crypto.randomUUID();
     let store = await Store.open(name);
