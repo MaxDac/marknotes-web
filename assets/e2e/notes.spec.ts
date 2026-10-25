@@ -4,7 +4,9 @@ async function submit(page: Page, value: string): Promise<void> {
   await dialog.getByRole("textbox").fill(value);
   await dialog.getByRole("button", { name: /^(Create|Save)$/ }).click();
   await expect(dialog).toBeHidden();
-  await expect(page.locator("#title")).toContainText(value);
+  await expect(page.locator("#title")).toContainText(
+    value.split("/").at(-1)!.replace(/\.md$/i, ""),
+  );
   await expect(page.locator("#workspace")).toBeEnabled();
 }
 async function create(
@@ -158,8 +160,14 @@ test("local CRUD, editor, privacy, settings and reload", async ({ page }) => {
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(page.locator("html")).toHaveAttribute("data-accent", "purple");
   await page.getByRole("button", { name: "Rename / move" }).click();
-  await submit(page, "Renamed.md");
-  await expect(page.locator("#tree")).toContainText("Renamed.md");
+  await expect(page.getByRole("dialog").getByRole("textbox")).toHaveValue(
+    "Work/Private",
+  );
+  await submit(page, "Work/Renamed");
+  await expect(page.locator('#tree [data-path="Work/Renamed.md"]')).toHaveText(
+    "Renamed",
+  );
+  await expect(page.locator("#title")).toHaveText("My notesWorkRenamed");
   expect(requests.join("\n")).not.toContain("PRIVATE_SENTINEL_3491");
   expect(frames.join("\n")).not.toContain("PRIVATE_SENTINEL_3491");
   await page.getByRole("button", { name: "Delete", exact: true }).click();
@@ -167,7 +175,75 @@ test("local CRUD, editor, privacy, settings and reload", async ({ page }) => {
     .getByRole("dialog")
     .getByRole("button", { name: "Delete", exact: true })
     .click();
-  await expect(page.locator("#tree")).not.toContainText("Renamed.md");
+  await expect(page.locator('#tree [data-path="Work/Renamed.md"]')).toHaveCount(
+    0,
+  );
+});
+test("note titles hide the extension, which renames keep", async ({ page }) => {
+  await page.goto("/");
+  await create(page, "New folder", "Folder.md");
+  await page.getByRole("button", { name: "New", exact: true }).click();
+  await page.getByRole("menuitem", { name: "New note" }).click();
+  await expect(page.getByRole("dialog").getByRole("textbox")).toHaveValue(
+    "Untitled",
+  );
+  await submit(page, "Plan.MD");
+  await expect(page.locator("#title")).toHaveText("My notesFolder.mdPlan");
+  await expect(
+    page.locator('#tree [data-path="Folder.md/Plan.MD"]'),
+  ).toHaveText("Plan");
+  const editor = page.getByRole("textbox", { name: "Markdown editor" });
+  await editor.fill("KEEP_BODY");
+  await expect(page.locator("#status")).toHaveText("Saved in this browser");
+
+  // A title without an extension keeps the note's own extension.
+  await page.getByRole("button", { name: "Rename / move" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("textbox")).toHaveValue("Folder.md/Plan");
+  await expect(dialog).toContainText("The note keeps its .md extension.");
+  await dialog.getByRole("textbox").fill("Folder.md/");
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(dialog).toContainText("Names cannot be blank");
+  await submit(page, "Folder.md/Renamed");
+  await expect(
+    page.locator('#tree [data-path="Folder.md/Renamed.MD"]'),
+  ).toHaveText("Renamed");
+  await expect(
+    page.locator('#tree [data-path="Folder.md/Plan.MD"]'),
+  ).toHaveCount(0);
+  await expect(page.locator("#title")).toHaveText("My notesFolder.mdRenamed");
+  await expect(editor).toHaveText("KEEP_BODY");
+
+  // The @ picker lists titles and full paths without the extension.
+  await editor.fill("@");
+  const picker = page.getByRole("listbox", { name: "Link to a note" });
+  await expect(picker.locator("strong")).toHaveText(["Renamed"]);
+  await expect(picker.locator(".mention-path")).toHaveText([
+    "Folder.md/Renamed",
+  ]);
+  await editor.fill("KEEP_BODY");
+  await expect(page.locator("#status")).toHaveText("Saved in this browser");
+
+  // Typing the extension does not double it.
+  await page.getByRole("button", { name: "Rename / move" }).click();
+  await submit(page, "Final.md");
+  await expect(page.locator('#tree [data-path="Final.md"]')).toHaveText(
+    "Final",
+  );
+  await expect(page.locator('#tree [data-path="Final.md.md"]')).toHaveCount(0);
+  // Folders keep their literal names, including a .md suffix.
+  await page.reload();
+  await expect(page.locator("#title")).toHaveText("My notesFinal");
+  await page.locator('#tree [data-path="Folder.md"]').click();
+  await expect(page.locator("#title")).toHaveText("My notesFolder.md");
+  await page.getByRole("button", { name: "Rename / move" }).click();
+  await expect(page.getByRole("dialog").getByRole("textbox")).toHaveValue(
+    "Folder.md",
+  );
+  await submit(page, "Literal.md");
+  await expect(page.locator('#tree [data-path="Literal.md"]')).toHaveText(
+    "Literal.md",
+  );
 });
 test("continues markdown lists and safely renders preview", async ({
   page,
@@ -309,7 +385,9 @@ test("Dropbox PKCE popup and direct browser sync", async ({
     .getByRole("button", { name: "Disconnect", exact: true })
     .click();
   await expect(page.locator("#accounts")).toBeEmpty();
-  await expect(page.locator("#tree")).toContainText("Cloud.md");
+  await expect(page.locator('#tree [data-path="Cloud.md"]')).toHaveText(
+    "Cloud",
+  );
 });
 
 test("OneDrive direct download, guarded writes and newest-wins reconciliation", async ({
@@ -459,9 +537,9 @@ test("OneDrive direct download, guarded writes and newest-wins reconciliation", 
     "Shared (conflicted copy).md",
   );
   await expect(editor).toContainText("theirs");
-  await expect(page.locator("#tree")).toContainText(
-    "Shared (conflicted copy).md",
-  );
+  await expect(
+    page.locator('#tree [data-path="Shared (conflicted copy).md"]'),
+  ).toHaveText("Shared (conflicted copy)");
   // Opening the note gave it an id; the conflicted copy gets its own id.
   expect(copy).toMatch(/^---\nid: [0-9a-z]{8}\n---\nmine$/);
   expect(content).toBe("theirs");
@@ -580,7 +658,7 @@ test("@ note links and local images", async ({ page }) => {
   const broken = page.locator("#preview a.note-link.broken");
   await expect(broken).toHaveAttribute("title", "Note not found");
   await page.locator("#preview a.note-link:not(.broken)").click();
-  await expect(page.locator("#title")).toContainText("Plan.md");
+  await expect(page.locator("#title")).toHaveText("My notesWorkPlan");
   await expect(editor).toContainText("The plan");
 
   // 1x1 transparent PNG

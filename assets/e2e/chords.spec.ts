@@ -232,7 +232,7 @@ test("opening a chord sequence with the setting off asks to enable it", async ({
 
   await item.click();
   let dialog = page.getByRole("dialog", { name: "Enable chord sequences?" });
-  await expect(dialog).toContainText("Stored.md is a chord sequence");
+  await expect(dialog).toContainText("Stored is a chord sequence");
   await dialog.getByRole("button", { name: "No" }).click();
   await expect(dialog).toHaveCount(0);
   await expect(page.locator("#empty")).toBeVisible();

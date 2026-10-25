@@ -137,7 +137,9 @@ to restore offline availability. Installing the app does not prevent browser sto
 
 ### Notes and cloud folders
 
-Use **New** → **New note** / **New chord sequence** (when enabled in Settings) / **New folder** in the selected folder. **Rename / move** accepts a path relative to the local root.
+Use **New** → **New note** / **New chord sequence** (when enabled in Settings) / **New folder** in the selected folder. **Rename / move** accepts a path relative to the local root. Notes are shown and renamed by title, the file name
+without `.md`: the tree, breadcrumb and `@` picker hide the extension, and a renamed note keeps it unless you type one.
+Folders keep their literal names.
 Notes must end in `.md`; hidden names, traversal and moves into a folder's own descendants are rejected.
 The editor saves automatically and flushes before navigation or sync. Wait for **Saved in this browser** before closing
 the tab; a failed/stale save leaves the text in the editor and displays an error.

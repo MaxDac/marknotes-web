@@ -20,7 +20,9 @@ import {
   filterRefs,
   noteBody,
   noteLink,
+  notePathLabel,
   noteRefs,
+  noteTitle,
   type NoteRef,
   withBody,
 } from "./notemeta";
@@ -33,6 +35,7 @@ import {
   join,
   parent,
   validateName,
+  validatePath,
   isNote,
 } from "./storage";
 import { drive, type Drive } from "./providers";
@@ -1128,7 +1131,7 @@ export class NotesUI {
     if (!note || !needsChordOptIn(this.chordsEnabled, note)) return true;
     const ok = await confirmDialog({
       title: "Enable chord sequences?",
-      text: `${note.path.split("/").at(-1)} is a chord sequence. Turn on chord sequences to open it in the chord editor? You can change this later in Settings.`,
+      text: `${noteTitle(note.path)} is a chord sequence. Turn on chord sequences to open it in the chord editor? You can change this later in Settings.`,
       confirm: "Yes",
       cancel: "No",
     });
@@ -1356,7 +1359,10 @@ export class NotesUI {
   private chrome(): void {
     const title = this.get("#title");
     title.replaceChildren(element("span", "My notes"));
-    for (const part of this.selected ? this.selected.split("/") : []) {
+    const label = this.selectedNote()
+      ? notePathLabel(this.selected)
+      : this.selected;
+    for (const part of label ? label.split("/") : []) {
       title.append(icon("chevron"), element("span", part));
     }
     this.get("#main").classList.toggle("has-note", !!this.current);
@@ -1570,7 +1576,7 @@ export class NotesUI {
     const name = await ask({
       title: folder ? "New folder" : chords ? "New chord sequence" : "New note",
       label: folder ? "Folder name" : chords ? "Sequence name" : "Note name",
-      value: folder ? "" : chords ? "Chords.md" : "Untitled.md",
+      value: folder ? "" : chords ? "Chords" : "Untitled",
       confirm: "Create",
       hint: `In /${where}`,
       validate: (value) =>
@@ -1590,22 +1596,36 @@ export class NotesUI {
   private async move(): Promise<void> {
     if (!this.selected) throw new Error("Select a note or folder first.");
     if (!(await this.leaveChords())) return;
+    const from = this.selected,
+      note = this.selectedNote();
+    // Notes are renamed by title; the original extension is kept unless one is typed.
+    const destination = (value: string) =>
+      note && !isNote(value) ? `${value}${from.slice(-3)}` : value;
     const to = await ask({
       title: "Rename or move",
       label: "New path",
-      value: this.selected,
+      value: note ? notePathLabel(from) : from,
       confirm: "Save",
-      hint: "Relative to the root folder. Include .md for notes.",
+      hint: note
+        ? "Relative to the root folder. The note keeps its .md extension."
+        : "Relative to the root folder.",
+      validate: (value) => validatePath(destination(value)),
     });
-    if (to === null || to === this.selected) return;
-    await this.store.move(this.selected, to);
+    if (to === null) return;
+    const path = destination(to);
+    if (path === from) return;
+    await this.store.move(from, path);
     await this.refresh();
-    await this.open(to, false);
+    await this.open(path, false);
+  }
+  /** Whether the selection is the open note (not a folder). */
+  private selectedNote(): boolean {
+    return !!this.selected && this.current?.path === this.selected;
   }
   private async delete(): Promise<void> {
     if (!this.selected) throw new Error("Select a note or folder first.");
     const ok = await confirmDialog({
-      title: `Delete ${this.selected.split("/").at(-1)}?`,
+      title: `Delete ${this.selectedNote() ? noteTitle(this.selected) : this.selected.split("/").at(-1)}?`,
       text: `${this.selected} and its contents will be deleted. This will propagate to connected drives at the next sync.`,
       confirm: "Delete",
       danger: true,
@@ -1634,7 +1654,7 @@ export class NotesUI {
         continue;
       const row = element("div", undefined, "tree-row");
       row.style.setProperty("--depth", String(parts.length - 1));
-      const name = parts.at(-1)!;
+      const name = note.folder ? parts.at(-1)! : noteTitle(note.path);
       if (note.folder) {
         const open = !this.collapsed.has(note.path);
         const expander = button(
@@ -1665,7 +1685,7 @@ export class NotesUI {
         },
       );
       item.dataset.path = note.path;
-      item.title = note.path;
+      item.title = note.folder ? note.path : notePathLabel(note.path);
       row.append(item);
       tree.append(row);
     }

@@ -8,7 +8,9 @@ async function note(page: Page, name: string, text: string): Promise<void> {
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("textbox").fill(name);
   await dialog.getByRole("button", { name: "Create" }).click();
-  await expect(page.locator("#title")).toContainText(name);
+  await expect(page.locator("#title")).toContainText(
+    name.replace(/\.md$/i, ""),
+  );
   await page.getByRole("textbox", { name: "Markdown editor" }).fill(text);
   await expect(
     page.getByRole("status").filter({ hasText: "Saved in this browser" }),
@@ -233,7 +235,7 @@ test("disconnecting the last drive can also delete the notes on this device", as
   await expect(option).not.toBeChecked();
   await dialog.getByRole("button", { name: "Disconnect", exact: true }).click();
   await expect(page.locator("#accounts")).toBeEmpty();
-  await expect(page.locator("#tree")).toContainText("Kept.md");
+  await expect(page.locator('#tree [data-path="Kept.md"]')).toHaveText("Kept");
 
   await connectDropbox(page);
   dialog = await disconnect();
