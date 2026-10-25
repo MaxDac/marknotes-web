@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { OTHER_PLATFORMS, platformLinks } from "../js/platforms";
 
 describe("links to other MarkNotes platforms", () => {
-  it("lists Android, Android Pro and Desktop but not the web app", () => {
+  it("lists Android, Android Plus and Desktop but not the web app", () => {
     const links = [...platformLinks().querySelectorAll("a")];
     expect(links.map((a) => [a.textContent, a.getAttribute("href")])).toEqual([
       [
@@ -11,7 +11,7 @@ describe("links to other MarkNotes platforms", () => {
         "https://f-droid.org/packages/io.github.maxdac.marknotes.libre/",
       ],
       [
-        "MarkNotes Pro for Android (GitHub Releases)",
+        "MarkNotes Plus for Android (GitHub Releases)",
         "https://github.com/MaxDac/MarkNotes/releases",
       ],
       [

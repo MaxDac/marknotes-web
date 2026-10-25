@@ -23,7 +23,7 @@ other platforms** (opened in a new tab only when clicked).
 
 - [MarkNotes for Android (F-Droid)](https://f-droid.org/packages/io.github.maxdac.marknotes.libre/) — source:
   [MaxDac/marknotes-android](https://github.com/MaxDac/marknotes-android) (F-Droid listing pending)
-- [MarkNotes Pro for Android (GitHub Releases)](https://github.com/MaxDac/MarkNotes/releases)
+- [MarkNotes Plus for Android (GitHub Releases)](https://github.com/MaxDac/MarkNotes/releases)
 - [MarkNotes Desktop (GitHub Releases)](https://github.com/MaxDac/marknotes-electron/releases)
 
 ## Features
