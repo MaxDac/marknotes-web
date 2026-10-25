@@ -149,8 +149,10 @@ the tab; a failed/stale save leaves the text in the editor and displays an error
 
 Connect a drive and browse to the same folder used by Android/desktop. By default the picker creates/uses a `MarkNotes`
 child folder; uncheck that option to sync the selected folder itself. A new connection is reconciled with **Sync now**.
-All accounts mirror the same local tree; they are not independent notebooks. Disconnect removes only that connection's
-local credentials/history, not local notes or provider-side app authorization. When disconnecting the last drive, the
+All accounts mirror the same local tree; they are not independent notebooks. Disconnect removes that connection's local
+credentials/history, not local notes. For Dropbox it first revokes the app's session with Dropbox (best effort: if the
+request fails, the drive is still disconnected locally); OneDrive is a local sign-out, because Microsoft offers public
+clients no single-session revoke. When disconnecting the last drive, the
 dialog offers **Also delete the notes stored on this device**, which also forgets this device; nothing on the drive is
 deleted.
 

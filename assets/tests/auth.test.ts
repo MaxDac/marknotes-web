@@ -187,4 +187,93 @@ describe("browser authentication", () => {
     });
     expect(mocks.login).not.toHaveBeenCalled();
   });
+  it("revokes the Dropbox session before forgetting its credentials", async () => {
+    await new Vault(store).save(account.id, {
+      access: "live",
+      refresh: "refresh",
+      expires: Date.now() + 3600_000,
+    });
+    await store.saveAccount(account);
+    const fetch = vi.fn().mockResolvedValue(new Response("null"));
+    vi.stubGlobal("fetch", fetch);
+    await new Auth(store, { dropbox: "public-key", onedrive: "" }).forget(
+      account,
+    );
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = fetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.dropboxapi.com/2/auth/token/revoke");
+    expect(init).toMatchObject({
+      method: "POST",
+      credentials: "omit",
+      headers: { Authorization: "Bearer live" },
+    });
+    expect(await new Vault(store).load(account.id)).toBeUndefined();
+    expect(await store.accounts()).toEqual([]);
+  });
+  it("renews an expired Dropbox token to revoke it without saving it", async () => {
+    await new Vault(store).save(account.id, {
+      access: "expired",
+      refresh: "refresh",
+      expires: 0,
+    });
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ access_token: "renewed", expires_in: 3600 }),
+        ),
+      )
+      .mockResolvedValueOnce(new Response("null"));
+    vi.stubGlobal("fetch", fetch);
+    await new Auth(store, { dropbox: "public-key", onedrive: "" }).forget(
+      account,
+    );
+    expect(fetch.mock.calls[0][0]).toBe(
+      "https://api.dropboxapi.com/oauth2/token",
+    );
+    expect(String(fetch.mock.calls[0][1].body)).toContain(
+      "refresh_token=refresh",
+    );
+    expect(fetch.mock.calls[1][0]).toBe(
+      "https://api.dropboxapi.com/2/auth/token/revoke",
+    );
+    expect(fetch.mock.calls[1][1].headers).toEqual({
+      Authorization: "Bearer renewed",
+    });
+    expect(await new Vault(store).load(account.id)).toBeUndefined();
+  });
+  it("forgets Dropbox credentials even when revoking fails", async () => {
+    for (const outcome of [
+      () => Promise.reject(new TypeError("Failed to fetch")),
+      () => Promise.resolve(new Response("", { status: 401 })),
+    ]) {
+      await new Vault(store).save(account.id, {
+        access: "live",
+        expires: Date.now() + 3600_000,
+      });
+      await store.saveAccount(account);
+      vi.stubGlobal("fetch", vi.fn().mockImplementation(outcome));
+      await expect(
+        new Auth(store, { dropbox: "public-key", onedrive: "" }).forget(
+          account,
+        ),
+      ).resolves.toBeUndefined();
+      expect(await new Vault(store).load(account.id)).toBeUndefined();
+      expect(await store.accounts()).toEqual([]);
+    }
+  });
+  it("keeps OneDrive disconnect a local sign-out", async () => {
+    const onedrive: Account = { ...account, provider: "onedrive" };
+    await new Vault(store).save(onedrive.id, {
+      access: "graph",
+      expires: Date.now() + 3600_000,
+    });
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    await new Auth(store, { dropbox: "", onedrive: "public-client" }).forget(
+      onedrive,
+    );
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await new Vault(store).load(onedrive.id)).toBeUndefined();
+  });
 });
