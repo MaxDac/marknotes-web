@@ -189,9 +189,9 @@ test("note titles hide the extension, which renames keep", async ({ page }) => {
   );
   await submit(page, "Plan.MD");
   await expect(page.locator("#title")).toHaveText("My notesFolder.mdPlan");
-  await expect(page.locator('#tree [data-path="Folder.md/Plan.MD"]')).toHaveText(
-    "Plan",
-  );
+  await expect(
+    page.locator('#tree [data-path="Folder.md/Plan.MD"]'),
+  ).toHaveText("Plan");
   const editor = page.getByRole("textbox", { name: "Markdown editor" });
   await editor.fill("KEEP_BODY");
   await expect(page.locator("#status")).toHaveText("Saved in this browser");
@@ -208,9 +208,9 @@ test("note titles hide the extension, which renames keep", async ({ page }) => {
   await expect(
     page.locator('#tree [data-path="Folder.md/Renamed.MD"]'),
   ).toHaveText("Renamed");
-  await expect(page.locator('#tree [data-path="Folder.md/Plan.MD"]')).toHaveCount(
-    0,
-  );
+  await expect(
+    page.locator('#tree [data-path="Folder.md/Plan.MD"]'),
+  ).toHaveCount(0);
   await expect(page.locator("#title")).toHaveText("My notesFolder.mdRenamed");
   await expect(editor).toHaveText("KEEP_BODY");
 
