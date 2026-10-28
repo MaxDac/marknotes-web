@@ -1,7 +1,8 @@
-import { EditorView, keymap } from "@codemirror/view";
+import { drawSelection, EditorView, keymap } from "@codemirror/view";
 import { Compartment, EditorState, Prec } from "@codemirror/state";
 import { markdown, markdownKeymap } from "@codemirror/lang-markdown";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { getCM, vim } from "@replit/codemirror-vim";
 import {
   syntaxHighlighting,
   defaultHighlightStyle,
@@ -103,6 +104,13 @@ export interface EditorHooks {
 const images = (data: DataTransfer | null): File[] =>
   [...(data?.files ?? [])].filter((f) => f.type.startsWith("image/"));
 const editing = new Compartment();
+const vimMode = new Compartment();
+/** Browser-only storage key for Settings → Vim mode (off by default, never synced). */
+export const VIM_SETTING = "vim-mode";
+/** Turns Vim keybindings on or off for an open editor without rebuilding it. */
+export function setEditorVim(view: EditorView, value: boolean): void {
+  view.dispatch({ effects: vimMode.reconfigure(value ? vim() : []) });
+}
 export function setEditorEditable(view: EditorView, value: boolean): void {
   view.dispatch({
     effects: editing.reconfigure([
@@ -125,6 +133,7 @@ export function createEditor(
           EditorView.editable.of(false),
           EditorState.readOnly.of(true),
         ]),
+        vimMode.of([]),
         Prec.highest(
           keymap.of(
             (
@@ -164,9 +173,20 @@ export function createEditor(
         }),
         history(),
         markdown(),
-        keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap]),
+        keymap.of([
+          // In Vim normal and visual mode Enter is a motion, not a line break.
+          {
+            key: "Enter",
+            run: (view) => getCM(view)?.state.vim?.insertMode === false,
+          },
+          ...markdownKeymap,
+          ...defaultKeymap,
+          ...historyKeymap,
+        ]),
         syntaxHighlighting(defaultHighlightStyle),
         EditorView.lineWrapping,
+        // Vim hides the native selection, so paint it (visual mode).
+        drawSelection(),
         EditorView.contentAttributes.of({
           "aria-label": "Markdown editor",
           spellcheck: "true",

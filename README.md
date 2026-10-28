@@ -61,6 +61,9 @@ other platforms** (opened in a new tab only when clicked).
   Limits: 5 MB for text files, 50 MB for documents (100 MB expanded DOCX), 500 PDF pages. Conversion assets, including
   the PDF worker, are lazy-loaded and precached for offline use. No PWA share target is registered: without a
   controlling service worker, a share target would send the shared note content to the server.
+- **Vim mode** (opt-in): turn on **Settings** → **Editor** → **Vim mode** (off by default, stored only in this
+  browser) to edit notes with Vim keybindings (modes, motions, operators, the `:` command line). It applies
+  immediately to the open note and never changes notes.
 - **Chord sequences** (opt-in): turn on **Settings** → **Chord sequences** (off by default, stored only in this
   browser). Then **New** → **New chord sequence** creates a note with `type: chords` in its front-matter. It opens in
   a graphical editor (ported from [ChordBuilder](https://github.com/MaxDac/ChordBuilder)) instead of the markdown editor.

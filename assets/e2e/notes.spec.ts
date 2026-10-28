@@ -809,3 +809,39 @@ test("settings link to the other MarkNotes apps in a new tab", async ({
   await expect(page.getByRole("dialog")).toBeVisible();
   await expect(page).toHaveURL(/localhost:4000\/$/);
 });
+test("vim mode is off by default and, once enabled, edits with Vim gestures", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await create(page, "New note", "Vim.md");
+  const setVim = async (on: boolean) => {
+    await page.getByRole("button", { name: "Settings" }).click();
+    const control = page.getByRole("switch", { name: "Vim mode" });
+    await expect(control).toHaveAttribute("aria-checked", String(!on));
+    await control.click();
+    await expect(control).toHaveAttribute("aria-checked", String(on));
+    await page.getByRole("button", { name: "Done" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+  };
+  await setVim(true);
+  const editor = page.getByRole("textbox", { name: "Markdown editor" });
+  const text = () => editor.evaluate((el) => el.textContent);
+  await editor.click();
+  await page.keyboard.press("Escape");
+  await page.keyboard.type("ihello world");
+  await page.keyboard.press("Escape");
+  await expect.poll(text).toBe("hello world");
+  await page.keyboard.type("0x");
+  await expect.poll(text).toBe("ello world");
+  await page.keyboard.type("yyp");
+  await expect.poll(text).toBe("ello worldello world");
+  await page.keyboard.type("dd");
+  await expect.poll(text).toBe("ello world");
+  await page.keyboard.press("Enter");
+  await expect.poll(text).toBe("ello world");
+
+  await setVim(false);
+  await editor.click();
+  await page.keyboard.type("i");
+  await expect.poll(text).toContain("i");
+});

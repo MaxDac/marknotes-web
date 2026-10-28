@@ -9,6 +9,8 @@ import {
   type Mention,
   preview,
   setEditorEditable,
+  setEditorVim,
+  VIM_SETTING,
 } from "./editor";
 import {
   ACCEPTED_TYPES,
@@ -176,6 +178,8 @@ export class NotesUI {
   private view: ViewMode = "split";
   /** Settings → Chord sequences: off by default, stored only in this browser. */
   private chordsEnabled = false;
+  /** Settings → Vim mode: off by default, stored only in this browser. */
+  private vimEnabled = false;
   private current?: Note;
   private selected = "";
   private dirty = false;
@@ -537,6 +541,8 @@ export class NotesUI {
     this.chordsEnabled =
       (await this.store.value<boolean>(CHORD_SETTING)) === true;
     this.applyChordSetting();
+    this.vimEnabled = (await this.store.value<boolean>(VIM_SETTING)) === true;
+    setEditorVim(this.editor, this.vimEnabled);
     this.theme = (await this.store.value<string>("theme")) ?? "system";
     const accent = (await this.store.value<string>("accent")) ?? "violet";
     this.accent = accent in palettes ? accent : "violet";
@@ -727,6 +733,22 @@ export class NotesUI {
       "Adds New chord sequence and opens chord notes in the chord editor. Stored only in this browser; notes are never changed.",
       "hint",
     );
+    const vimSwitch = toggle("Vim mode", this.vimEnabled);
+    vimSwitch.id = "vim-mode";
+    vimSwitch.addEventListener("click", () => {
+      const previous = this.vimEnabled;
+      void (async () => {
+        try {
+          const enabled = checked(vimSwitch);
+          await this.store.put(VIM_SETTING, enabled);
+          this.vimEnabled = enabled;
+          setEditorVim(this.editor, enabled);
+        } catch (error) {
+          vimSwitch.setAttribute("aria-checked", String(previous));
+          this.error(message(error));
+        }
+      })();
+    });
     const reconnectSwitch = toggle(
       "Sync when reconnected",
       this.reconnectEnabled,
@@ -787,6 +809,15 @@ export class NotesUI {
         ),
       ),
       section("Chord sequences", chordSwitch, chordHint),
+      section(
+        "Editor",
+        vimSwitch,
+        element(
+          "p",
+          "Write notes with Vim keybindings: modes, motions, operators and the : command line. Stored only in this browser; notes are never changed.",
+          "hint",
+        ),
+      ),
       section(
         "Sync",
         reconnectSwitch,
