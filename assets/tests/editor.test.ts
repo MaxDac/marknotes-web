@@ -2,13 +2,36 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { EditorView } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
+import { getCM } from "@replit/codemirror-vim";
 import {
+  createEditor,
   cycleHeading,
   format,
   mentionAt,
   numberedList,
   preview,
+  setEditorEditable,
+  setEditorVim,
 } from "../js/editor";
+
+describe("vim mode", () => {
+  const key = (view: EditorView, name: string) =>
+    view.contentDOM.dispatchEvent(
+      new KeyboardEvent("keydown", { key: name, bubbles: true }),
+    );
+  it("switches Vim keybindings on and off without rebuilding the editor", () => {
+    const view = createEditor(document.body, () => {});
+    setEditorEditable(view, true);
+    expect(getCM(view)?.state.vim).toBeFalsy();
+    setEditorVim(view, true);
+    expect(getCM(view)?.state.vim?.insertMode).toBe(false);
+    key(view, "Enter");
+    expect(view.state.doc.toString()).toBe("");
+    setEditorVim(view, false);
+    expect(getCM(view)).toBeNull();
+    view.destroy();
+  });
+});
 
 describe("toolbar commands", () => {
   let view: EditorView;

@@ -622,6 +622,32 @@ a {
   padding: 24px 32px !important;
   caret-color: var(--accent);
 }
+.cm-editor .cm-selectionBackground,
+.cm-editor.cm-focused
+  > .cm-scroller
+  > .cm-selectionLayer
+  .cm-selectionBackground {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.cm-fat-cursor {
+  background: color-mix(in srgb, var(--accent) 60%, transparent) !important;
+}
+.cm-editor:not(.cm-focused) .cm-fat-cursor {
+  outline: 1px solid var(--accent);
+  background: transparent !important;
+}
+.cm-vim-panel {
+  padding: 2px 32px;
+  font-family: ui-monospace, "Cascadia Code", Menlo, monospace;
+  background: var(--bg);
+  color: var(--fg);
+}
+.cm-vim-panel input {
+  background: transparent;
+  color: var(--fg);
+  border: none;
+  outline: none;
+}
 .cm-gutters {
   display: none;
 }

@@ -704,6 +704,21 @@ describe("settings", () => {
     buttonIn(d, "System").click();
     expect(document.documentElement.dataset.theme).toBe("light");
   });
+  it("keeps Vim mode off by default and persists it in this browser", async () => {
+    await mount();
+    const d = await settings();
+    const vim = d.querySelector<HTMLButtonElement>("#vim-mode")!;
+    expect(vim.getAttribute("aria-checked")).toBe("false");
+    vim.click();
+    await vi.waitFor(() =>
+      expect(vim.getAttribute("aria-checked")).toBe("true"),
+    );
+    await remount();
+    const again = await settings();
+    expect(again.querySelector("#vim-mode")!.getAttribute("aria-checked")).toBe(
+      "true",
+    );
+  });
   it("stores the sync-on-reconnect preference and notifies other tabs", async () => {
     await mount();
     const d = await settings();
